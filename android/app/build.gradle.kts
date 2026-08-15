@@ -4,6 +4,12 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// 正式签名：CI（或本地）通过环境变量注入密钥；未注入时回退 debug 签名，
+// 保证 `flutter run` / 本地无密钥构建不受影响。密钥在 GitHub Secrets，
+// 本地副本 ~/.keystores/zcode-remote-client/。
+val ksPath = System.getenv("KEYSTORE_PATH")
+val ksPassword = System.getenv("KEYSTORE_PASSWORD")
+
 android {
     namespace = "com.charlotte.zcode_remote_client"
     compileSdk = flutter.compileSdkVersion
@@ -25,11 +31,24 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (ksPath != null && ksPassword != null) {
+                storeFile = file(ksPath)
+                storePassword = ksPassword
+                keyAlias = System.getenv("KEY_ALIAS") ?: "zcode"
+                keyPassword = ksPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (ksPath != null && ksPassword != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
