@@ -18,7 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 # 版本号只写 X.Y.Z（发版时 +0.0.1）；build 号不手写，
 # 由 CI 用 --build-number 注入（提交数+1000），见 .github/workflows/release.yml
-version: 1.1.5
+version: 1.1.6
 
 environment:
   sdk: ^3.12.2
@@ -46,6 +46,7 @@ dependencies:
   http: ^1.2.0
   path_provider: ^2.1.4
   open_filex: ^4.5.0
+  flutter_local_notifications: ^22.3.0
 
 dev_dependencies:
   flutter_test:

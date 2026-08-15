@@ -39,10 +39,25 @@ tag `vX.Y.Z` → 创建 Release（说明取 RELEASE_NOTES.md + 附带构建哈�
   （改依赖等触碰 pubspec 的提交不会白白跑 20 分钟）
 - RELEASE_NOTES.md 缺失或为空 → 发布直接失败（强制写说明）
 - 应用内更新下载（Android）：分段并行（4 连接，迅雷式）+ 断点续传
-  （分段粒度，ETag 校验防串包）+ 自动重试 + 可取消，弱网可靠
+  （分段粒度，ETag 校验防串包）+ 自动重试，弱网可靠
+- 下载由 `lib/services/download_manager.dart` 后台管理（不绑定弹窗）：
+  重启后启动检查自动续传断点（用户主动取消过的不强拉，可在设置页继续）；
+  完成包保留，安装失败/取消后再次「立即更新」直接拉安装不重下；发现
+  新版本先删光旧版本残留；全部重试失败只在设置页弹窗（重试/删除重下），
+  其他场景走通知栏（flutter_local_notifications，含下载进度常驻通知，
+  Android 需 core library desugaring，见 app/build.gradle.kts）
 
 ## 注意事项
 
+- **应用图标**：唯一源图是
+  `macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png`（全出血设计）。
+  Android 图标由它生成——自适应图标（`mipmap-anydpi-v26/*.xml` +
+  `ic_launcher_foreground.png`，前景=源图缩到 84% 画布、边缘外推补齐；
+  背景色 `values/ic_launcher_background.xml` 取源图四角平均色），以及
+  带遮罩的传统位图（`ic_launcher.png` 圆角 22.37% / `ic_launcher_round.png`
+  圆形）。换图标时先替换 macOS 源图，再跑
+  `swift tool/gen_android_icons.swift <源图> android/app/src/main/res`
+  重新生成（不要手改单张 PNG）
 - **Android 从 v1.1.4 起为正式签名**（密钥在 GitHub Secrets
   `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD`，本地副本在
   `~/.keystores/zcode-remote-client/`）。v1.1.3 及更早的 debug 签名包升级

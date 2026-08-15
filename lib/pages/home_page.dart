@@ -47,7 +47,8 @@ class _HomePageState extends State<HomePage> {
   Future<void> _checkUpdatesOnStart() async {
     await Future<void>.delayed(const Duration(seconds: 2));
     if (!mounted) return;
-    // 启动时静默检查更新，发现新版本才弹窗。
+    // 启动静默检查更新：断点自动续传/已就绪只走通知栏，不打扰；
+    // 全新版本才弹「发现新版本」引导。详见 update_dialog.dart。
     checkForUpdates(context);
   }
 

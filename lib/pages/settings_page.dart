@@ -5,13 +5,72 @@ import 'package:provider/provider.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
+import '../services/download_manager.dart';
 import '../services/update_checker.dart';
 import '../widgets/device_edit_sheet.dart';
 import '../widgets/update_dialog.dart';
 
-/// 设置页：设备管理（增删改、设为当前）+ 通用偏好。
-class SettingsPage extends StatelessWidget {
+/// 设置页：设备管理（增删改、设为当前）+ 通用偏好 + 应用/更新。
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  @override
+  void initState() {
+    super.initState();
+    // 下载全部重试失败时的弹窗只在本页弹出（其余场景走通知栏）。
+    DownloadManager.instance.settingsFailurePresenter = _onDownloadFailed;
+  }
+
+  @override
+  void dispose() {
+    final dm = DownloadManager.instance;
+    if (dm.settingsFailurePresenter == _onDownloadFailed) {
+      dm.settingsFailurePresenter = null;
+    }
+    super.dispose();
+  }
+
+  void _onDownloadFailed() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final dm = DownloadManager.instance;
+        return AlertDialog(
+          title: const Text('更新下载失败'),
+          content: const Text(
+            '网络不佳，自动重试多次仍未成功。\n要删除后重新下载，还是从断点继续重试？',
+            style: TextStyle(fontSize: 13, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('稍后'),
+            ),
+            OutlinedButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                dm.deleteAndRestart();
+              },
+              child: const Text('删除重新下载'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                dm.retry();
+              },
+              child: const Text('继续重试'),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   Future<void> _confirmDelete(BuildContext context, RemoteDevice device) async {
     final store = context.read<DeviceStore>();
@@ -44,6 +103,154 @@ class SettingsPage extends StatelessWidget {
         context,
       ).showSnackBar(const SnackBar(content: Text('已复制完整地址（含连接凭证，注意勿外泄）')));
     }
+  }
+
+  String _mb(int bytes) => (bytes / 1048576).toStringAsFixed(1);
+
+  /// 下载状态卡片：下载中（进度+取消）/ 已暂停（继续）/ 失败（重试、
+  /// 删除重下）/ 已完成未安装（立即安装）。仅在非 idle 时由外层调用。
+  Widget _buildUpdateStatusCard() {
+    final dm = DownloadManager.instance;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: Theme.of(
+            context,
+          ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        ),
+        child: ListenableBuilder(
+          listenable: Listenable.merge([
+            dm.status,
+            dm.receivedBytes,
+            dm.totalBytes,
+          ]),
+          builder: (context, _) {
+            final s = dm.status.value;
+            final received = dm.receivedBytes.value;
+            final total = dm.totalBytes.value;
+            final pct = total > 0 ? received * 100 ~/ total : 0;
+            final version = dm.release?.version ?? '';
+            switch (s) {
+              case DownloadStatus.downloading:
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            '正在后台下载 v$version · $pct%',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: dm.cancel,
+                          child: const Text('取消'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    LinearProgressIndicator(
+                      value: total > 0
+                          ? (received / total).clamp(0.0, 1.0)
+                          : null,
+                    ),
+                  ],
+                );
+              case DownloadStatus.cancelled:
+                return Row(
+                  children: [
+                    const Icon(Icons.pause_circle_outline, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '更新下载已暂停 · 已下载 $pct% (${_mb(received)} MB)',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    FilledButton.tonal(
+                      onPressed: () => dm.retry(),
+                      child: const Text('继续下载'),
+                    ),
+                  ],
+                );
+              case DownloadStatus.failed:
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.error_outline,
+                          size: 20,
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            '更新下载失败（网络不佳，已自动重试多次）',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => dm.deleteAndRestart(),
+                          child: const Text('删除重新下载'),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: () => dm.retry(),
+                          child: const Text('从断点重试'),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              case DownloadStatus.completed:
+                return Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'v$version 已下载完成，尚未安装',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: () => dm.promptInstall(),
+                      icon: const Icon(Icons.install_mobile, size: 18),
+                      label: const Text('安装'),
+                    ),
+                  ],
+                );
+              case DownloadStatus.idle:
+                return const SizedBox.shrink();
+            }
+          },
+        ),
+      ),
+    );
   }
 
   @override
@@ -119,7 +326,7 @@ class SettingsPage extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: () => DeviceEditSheet.show(context),
                 icon: const Icon(Icons.add),
-                label: const Text('添加新地址'),
+                label: Text('添加新地址'),
               ),
             ),
             const Divider(height: 32),
@@ -157,6 +364,13 @@ class SettingsPage extends StatelessWidget {
                 icon: const Icon(Icons.system_update, size: 18),
                 label: const Text('检查更新'),
               ),
+            ),
+            // 下载状态卡片（下载中/已暂停/失败/待安装）。
+            ValueListenableBuilder<DownloadStatus>(
+              valueListenable: DownloadManager.instance.status,
+              builder: (context, s, _) => s == DownloadStatus.idle
+                  ? const SizedBox.shrink()
+                  : _buildUpdateStatusCard(),
             ),
             const Divider(height: 32),
             Padding(
