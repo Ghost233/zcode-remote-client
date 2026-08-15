@@ -139,8 +139,14 @@ jobs:
     name: macOS 双架构 DMG
     needs: prepare
     if: needs.prepare.outputs.run-builds == 'true'
-    runs-on: macos-latest
+    # 钉住 macos-26 镜像 + Xcode 26.3：flutter_inappwebview_macos 1.2.0-beta.3
+    # 的 WebAuthenticationSession.swift 类声明未加 @available 门控就遵从
+    # ASWebAuthenticationPresentationContextProviding（实现方法却标注 10.15），
+    # Xcode 26.6 的 Swift 检查器在部署目标 10.14 下直接报错；26.3 可编译。
+    # 插件修复后可解除 DEVELOPER_DIR 钉扎（届时同步升 macos-26 镜像标签）。
+    runs-on: macos-26
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app
       BUILD_NAME: ${{ needs.prepare.outputs.version }}
       BUILD_NUMBER: ${{ needs.prepare.outputs.build-number }}
       BUILD_HASH: ${{ needs.prepare.outputs.hash6 }}
