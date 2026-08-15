@@ -38,7 +38,8 @@ tag `vX.Y.Z` → 创建 Release（说明取 RELEASE_NOTES.md + 附带构建哈�
 - pubspec 版本与最新 Release tag 相同时，push 触发的运行会自动跳过构建
   （改依赖等触碰 pubspec 的提交不会白白跑 20 分钟）
 - RELEASE_NOTES.md 缺失或为空 → 发布直接失败（强制写说明）
-- 应用内更新下载（Android）支持断点续传 + 自动重试，弱网可靠
+- 应用内更新下载（Android）：分段并行（4 连接，迅雷式）+ 断点续传
+  （分段粒度，ETag 校验防串包）+ 自动重试 + 可取消，弱网可靠
 
 ## 注意事项
 
