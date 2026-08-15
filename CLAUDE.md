@@ -19,7 +19,8 @@ ZCode 远程终端跨平台客户端（iOS / Android / macOS / Windows），内�
 flutter build apk --release
 flutter build macos --release
 
-# 3. 打包 macOS（保留可执行权限）
+# 3. 附件统一命名：zcode-remote-client-<平台>-vX.Y.Z.<ext>
+cp build/app/outputs/flutter-apk/app-release.apk /tmp/zcode-remote-client-android-vX.Y.Z.apk
 cd build/macos/Build/Products/Release
 zip -r -q -y zcode-remote-client-macos-vX.Y.Z.zip zcode_remote_client.app
 cd -
@@ -29,9 +30,10 @@ git add -A && git commit -m "..." && git push origin main
 
 # 5. 发布 Release（tag 与 pubspec 版本一致）
 gh release create vX.Y.Z \
-  build/app/outputs/flutter-apk/app-release.apk \
-  "build/macos/Build/Products/Release/zcode-remote-client-macos-vX.Y.Z.zip#zcode-remote-client-macos-vX.Y.Z.zip" \
-  --title "vX.Y.Z" --notes "更新说明..."
+  /tmp/zcode-remote-client-android-vX.Y.Z.apk \
+  build/macos/Build/Products/Release/zcode-remote-client-macos-vX.Y.Z.zip \
+  --title "vX.Y.Z" --notes "更新说明...\
+  （注意：gh release upload 不支持 # 改名语法，必须先物理改名再上传）"
 ```
 
 ## 注意事项
