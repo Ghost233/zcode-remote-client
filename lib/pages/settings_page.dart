@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
 import '../widgets/device_edit_sheet.dart';
+import '../widgets/update_dialog.dart';
 
 /// 设置页：设备管理（增删改、设为当前）+ 通用偏好。
 class SettingsPage extends StatelessWidget {
@@ -129,6 +131,28 @@ class SettingsPage extends StatelessWidget {
               subtitle: const Text('悬浮球与工具栏二合一；关闭后屏幕边缘会保留一个细把手，点击可恢复'),
               value: store.bubbleEnabled,
               onChanged: (v) => store.setBubbleEnabled(v),
+            ),
+            const Divider(height: 32),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('关于', style: Theme.of(context).textTheme.titleSmall),
+            ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('当前版本'),
+              subtitle: FutureBuilder<PackageInfo>(
+                future: PackageInfo.fromPlatform(),
+                builder: (context, snap) => Text(
+                  snap.hasData
+                      ? 'v${snap.data!.version} (${snap.data!.buildNumber})'
+                      : '…',
+                ),
+              ),
+              trailing: OutlinedButton.icon(
+                onPressed: () => checkForUpdates(context, manual: true),
+                icon: const Icon(Icons.system_update, size: 18),
+                label: const Text('检查更新'),
+              ),
             ),
             const Divider(height: 32),
             Padding(

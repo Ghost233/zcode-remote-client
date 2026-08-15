@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- WebView 加载远程页面必须；release 构建也需要显式声明 -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- 应用内检查更新：下载 APK 后拉起安装 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
         android:label="ZCode 远程"
         android:name="${applicationName}"

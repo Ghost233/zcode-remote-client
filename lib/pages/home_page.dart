@@ -12,6 +12,7 @@ import '../widgets/device_edit_sheet.dart';
 import '../widgets/device_switcher_sheet.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/glass.dart';
+import '../widgets/update_dialog.dart';
 import 'settings_page.dart';
 
 /// 首页：全屏浏览器 + 悬浮控制栏。
@@ -49,6 +50,8 @@ class _HomePageState extends State<HomePage> {
           initialViewZoom: store.savedViewZoom,
         );
       }
+      // 启动时静默检查更新，发现新版本才弹窗。
+      checkForUpdates(context);
     });
   }
 
