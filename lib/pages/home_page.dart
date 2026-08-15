@@ -35,24 +35,20 @@ class _HomePageState extends State<HomePage> {
   final Map<String, ValueNotifier<double>> _viewZooms = {};
   final Map<String, GlobalKey<BrowserViewState>> _viewKeys = {};
 
+  /// 是否已做过启动自动恢复（只恢复一次，之后由用户操作驱动）。
+  bool _autoOpened = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final store = context.read<DeviceStore>();
-      final id = store.currentId;
-      if (id != null) {
-        // 启动时用保存的缩放比例初始化首个会话。
-        _open(
-          id,
-          initialPageZoom: store.savedPageZoom,
-          initialViewZoom: store.savedViewZoom,
-        );
-      }
-      // 启动时静默检查更新，发现新版本才弹窗。
-      checkForUpdates(context);
-    });
+    _checkUpdatesOnStart();
+  }
+
+  Future<void> _checkUpdatesOnStart() async {
+    await Future<void>.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+    // 启动时静默检查更新，发现新版本才弹窗。
+    checkForUpdates(context);
   }
 
   @override
@@ -168,6 +164,22 @@ class _HomePageState extends State<HomePage> {
     final store = context.watch<DeviceStore>();
     final currentId = store.currentId;
     final currentIndex = currentId != null ? _openIds.indexOf(currentId) : -1;
+
+    // 响应式自动打开：设备列表是异步加载的，可能晚于首帧——一次性检查会
+    // 永远停在空状态。只在"尚未打开过任何会话"时自动恢复，避免用户
+    // 主动关闭全部会话后又被强行拉起。
+    if (currentId != null && _openIds.isEmpty && !_autoOpened) {
+      _autoOpened = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _open(
+          currentId,
+          // 启动恢复时套用保存的缩放比例。
+          initialPageZoom: store.savedPageZoom,
+          initialViewZoom: store.savedViewZoom,
+        );
+      });
+    }
 
     // Android edge-to-edge：网页层完全铺满，不做系统栏避让（否则状态栏
     // 区域会显出一条留白）；iOS 保持避让刘海/灵动岛与底部手势区。

@@ -1,3 +1,4 @@
+import 'dart:collection' show UnmodifiableListView;
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -15,6 +16,45 @@ import 'glass.dart';
 const kDesktopUserAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
     '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+/// 桌面模式视口脚本：把 viewport 钉在桌面宽度（1280），移动端响应式
+/// 站点因此按桌面布局渲染——光换 UA 对按视口宽度适配的页面没有可见
+/// 效果。SPA 若重建/改写 viewport 标签，会被 MutationObserver 再次覆盖。
+/// 桌面端 WebView 本身忽略 viewport meta，注入后无副作用。
+const String kDesktopViewportScript = '''
+(function() {
+  function apply() {
+    try {
+      var m = document.querySelector('meta[name="viewport"]');
+      if (!m) {
+        m = document.createElement('meta');
+        m.setAttribute('name', 'viewport');
+        (document.head || document.documentElement).appendChild(m);
+      }
+      if ((m.getAttribute('content') || '').indexOf('width=1280') < 0) {
+        m.setAttribute('content', 'width=1280');
+      }
+    } catch (e) {}
+  }
+  var mo = new MutationObserver(function() {
+    apply();
+    hookMeta();
+  });
+  function hookMeta() {
+    try {
+      var m = document.head && document.head.querySelector('meta[name="viewport"]');
+      if (m) mo.observe(m, { attributes: true, attributeFilter: ['content'] });
+    } catch (e) {}
+  }
+  function hook() {
+    if (!document.head) { setTimeout(hook, 20); return; }
+    apply();
+    try { mo.observe(document.head, { childList: true }); } catch (e) {}
+    hookMeta();
+  }
+  hook();
+})();
+''';
 
 /// 单个设备对应的完整功能浏览器视图。
 ///
@@ -405,6 +445,9 @@ class BrowserViewState extends State<BrowserView>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    // 桌面模式是"创建时"快照：UA / 原生 contentMode / 视口脚本都只能随
+    // WebView 重建生效，切换开关时由外部重建当前会话。
+    final desktopMode = context.watch<DeviceStore>().desktopMode;
     return Stack(
       children: [
         InAppWebView(
@@ -421,12 +464,23 @@ class BrowserViewState extends State<BrowserView>
             allowsBackForwardNavigationGestures: true,
             isFraudulentWebsiteWarningEnabled: false,
             disableContextMenu: false,
-            // 桌面模式：用桌面 Chrome UA 请求站点（UA 只能在创建时设置，
-            // 切换时由外部重建会话生效）。
-            userAgent: context.watch<DeviceStore>().desktopMode
-                ? kDesktopUserAgent
-                : null,
+            // 桌面模式三项配合，等效浏览器"桌面版网站"开关：
+            // 1) 桌面 Chrome UA；2) iOS 原生 preferredContentMode（Safari
+            //    "请求桌面网站"的实现）；3) 注入脚本把 viewport 钉在 1280
+            //    宽（移动端按桌面宽度渲染，桌面端忽略 viewport 无副作用）。
+            userAgent: desktopMode ? kDesktopUserAgent : null,
+            preferredContentMode: desktopMode
+                ? UserPreferredContentMode.DESKTOP
+                : UserPreferredContentMode.RECOMMENDED,
           ),
+          initialUserScripts: desktopMode
+              ? UnmodifiableListView([
+                  UserScript(
+                    source: kDesktopViewportScript,
+                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                  ),
+                ])
+              : null,
           pullToRefreshController: _pullToRefresh,
           contextMenu: ContextMenu(
             settings: ContextMenuSettings(
