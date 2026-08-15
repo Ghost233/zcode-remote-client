@@ -125,8 +125,10 @@ jobs:
         env:
           # flutter_inappwebview_windows 用 <experimental/coroutine>（/await），
           # 最新 MSVC STL 把它升级成硬错误 STL1011；微软官方开关压掉，
-          # 通过 CL 环境变量注入对插件子工程也生效。
-          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+          # 通过 CL 环境变量注入对插件子工程也生效。注意必须用 -D 而不是
+          # /D：Git-Bash 会把 /D 开头的值当 Unix 路径转换成 C:\...\D，
+          # 传给 cl 就成了乱参数（表现为 CMake 找不到 C++ 编译器）。
+          CL: -D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
 
       # 产物是 exe + dll + data 一整套，整个 Release 目录打成 zip
       - name: 打 zip
