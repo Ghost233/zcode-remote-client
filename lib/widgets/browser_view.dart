@@ -56,37 +56,89 @@ const String kDesktopViewportScript = '''
 })();
 ''';
 
-/// 输入法组合态回车保护。
+/// 输入法组合态回车保护 v2。
 ///
-/// 中文等输入法组词过程中按回车：Chromium（Edge/Chrome）给页面的
-/// keydown 是 keyCode=229 且会消费掉提交组合的那次回车，页面收不到；
-/// 而 WKWebView（本 app 的 macOS/iOS 内核）会派发 keyCode=13 的正常
-/// 回车，页面按 Chromium 惯例写的防御（只认 229）就失效了——组词途中
-/// 一按回车整句被"发送"出去。
+/// 要同时扛住两类引擎行为：
+/// 1) Chromium（Android/Windows）：组合中的按键 keydown 恒为 keyCode=229，
+///    提交组合的那次回车要么被内核消费、要么以 229 形态到达（符合规范）。
+/// 2) WebKit（macOS/iOS 内核，Bug 165004，2026-04 才修，存量系统带病）：
+///    先派发 compositionend（组合文本上屏），之后才派发"提交组合的那次
+///    回车"，且 isComposing=false——对页面完全伪装成普通回车。网页自身
+///    的 isComposing 防御（如 ZCode 的 Lexical 输入框）因此全部失效，
+///    表现为：/com 组合中按回车 → 直接执行了高亮建议 /compact。
 ///
-/// 处理：文档开始即在 window 捕获阶段拦截组合态的 Enter（keydown/
-/// keypress/keyup），不让页面监听器收到；不 preventDefault——组合的
-/// 提交由输入法在原生层完成（macOS 拼音：回车落选上屏原始字母），
-/// 行为与 Edge 对齐。候选窗内按回车选词不会到达页面，不受影响。
-const String kImeEnterGuardScript = '''
+/// 防线（业界同款：ProseMirror/CodeMirror 6 的 Safari 一次性吞键窗口、
+/// stum.de 的非回车键复位、MDN 的 isComposing||229 双查）：
+/// - window 捕获阶段拦截 Enter 形状的 keydown/keypress/keyup，判定命中
+///   组合态时 stopImmediatePropagation；只 stop、绝不 preventDefault——
+///   组合期取消 keydown 会杀掉输入法上屏（W3C UI Events）。
+/// - 判定：e.isComposing || 自维护组合标志（compositionend 后延迟清零）
+///   || keyCode/which=229 || key='Process'。
+/// - WebKit 专属兜底（仅 macOS 启用）：compositionend 后 300ms 内的第一记
+///   回车视为"提交组合的那次按键"，一次性吞掉；期间若先来了任何非回车
+///   keydown（空格/数字选词的尾随按键），说明组合不是回车确认的，撤销
+///   窗口，避免误吞用户随后的真实回车。iOS 不启用（可能根本不派发尾随
+///   回车，盲开会吞掉用户选词后的真实回车）；Chromium 不需要（尾随回车
+///   在 compositionend 之前已到达）。
+/// - 事件环形日志 window.__zcodeImeLog（60 条），排查输入法问题时可从
+///   控制台或 evaluateJavascript 读取。
+String imeEnterGuardScript({required bool webkit}) => '''
 (function() {
   if (window.__zcodeImeGuard) return;
   window.__zcodeImeGuard = true;
+  var IS_WEBKIT = ${webkit ? 'true' : 'false'};
+  var GRACE_MS = 300;
   var composing = false;
+  var endedAt = 0;
+  var swallowOnce = false;
+  var swallowKeyup = false;
+  var log = [];
+  window.__zcodeImeLog = log;
+  function rec(o) {
+    o.t = Date.now();
+    log.push(o);
+    if (log.length > 60) log.shift();
+  }
   window.addEventListener('compositionstart', function() {
     composing = true;
+    rec({type: 'compositionstart'});
   }, true);
   window.addEventListener('compositionend', function() {
-    // compositionend 与触发它的 keydown 的先后顺序各引擎不同，
-    // 延一拍再放行，保证"提交组合的那次回车"仍被拦截。
+    endedAt = Date.now();
+    if (IS_WEBKIT) swallowOnce = true;
+    // 延迟清零扛"end 与回车同批派发"，但独立的回车任务到来前定时器可能
+    // 已执行——WebKit 的主要防线是上面的一次性窗口。
     setTimeout(function() { composing = false; }, 0);
+    rec({type: 'compositionend'});
   }, true);
   function guard(e) {
-    if (e.key !== 'Enter' && e.keyCode !== 13) return;
-    if (e.isComposing || composing) {
-      e.stopImmediatePropagation();
-      e.stopPropagation();
+    var enter = e.key === 'Enter' || e.keyCode === 13;
+    if (!enter) {
+      // 非回车 keydown 先到：组合是用空格/数字等别的键确认的（其尾随
+      // keydown 现在才到），撤销吞键窗口，防误吞用户随后的真实回车。
+      if (e.type === 'keydown' && swallowOnce) swallowOnce = false;
+      return;
     }
+    var owned = e.isComposing || composing ||
+        e.keyCode === 229 || e.which === 229 || e.key === 'Process';
+    if (!owned && swallowOnce) {
+      if (Date.now() - endedAt < GRACE_MS) owned = true;
+      else swallowOnce = false;
+    }
+    rec({type: e.type, key: e.key, keyCode: e.keyCode,
+         isComposing: !!e.isComposing, owned: owned});
+    if (!owned) {
+      swallowKeyup = false;
+      return;
+    }
+    if (e.type === 'keydown') {
+      swallowOnce = false;
+      swallowKeyup = true;
+    } else if (e.type === 'keyup' && swallowKeyup) {
+      swallowKeyup = false;
+    }
+    e.stopImmediatePropagation();
+    e.stopPropagation();
   }
   window.addEventListener('keydown', guard, true);
   window.addEventListener('keypress', guard, true);
@@ -511,12 +563,14 @@ class BrowserViewState extends State<BrowserView>
                 ? UserPreferredContentMode.DESKTOP
                 : UserPreferredContentMode.RECOMMENDED,
           ),
-          // 常驻：输入法组合态回车保护（修中文输入法组词途中回车误发送）；
+          // 常驻：输入法组合态回车保护（修中文输入法组词途中回车误发送/
+          // 误执行命令）；forMainFrameOnly: false 让脚本进所有 frame。
           // 桌面模式追加视口脚本。
           initialUserScripts: UnmodifiableListView([
             UserScript(
-              source: kImeEnterGuardScript,
+              source: imeEnterGuardScript(webkit: Platform.isMacOS),
               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              forMainFrameOnly: false,
             ),
             if (desktopMode)
               UserScript(
@@ -582,10 +636,15 @@ class BrowserViewState extends State<BrowserView>
             }
             return true;
           },
-          onDownloadStartRequest: (controller, request) async {
+          onDownloadStarting: (controller, request) async {
             // 下载交给系统浏览器/下载器处理。
             await launchUrl(request.url, mode: LaunchMode.externalApplication);
             _toast('已交给系统浏览器下载');
+            // Windows 上取消 WebView2 自带的下载 UI（已外抛系统浏览器）。
+            return DownloadStartResponse(
+              handled: true,
+              action: DownloadStartResponseAction.CANCEL,
+            );
           },
           shouldOverrideUrlLoading: (controller, action) async {
             final uri = action.request.url;

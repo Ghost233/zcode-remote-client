@@ -18,7 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 # 版本号只写 X.Y.Z（发版时 +0.0.1）；build 号不手写，
 # 由 CI 用 --build-number 注入（提交数+1000），见 .github/workflows/release.yml
-version: 1.1.8
+version: 1.1.9
 
 environment:
   sdk: ^3.12.2
@@ -38,7 +38,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   provider: ^6.1.2
   shared_preferences: ^2.3.2
-  flutter_inappwebview: ^6.1.5
+  # 精确锁 6.2.0-beta.3：macOS 键盘焦点被 Flutter 引擎抢占（完全无法输入）
+  # 的官方修复只在这个 beta 线里（#2380，6.1.5 无处理），勿降回 ^6.1.5
+  flutter_inappwebview: 6.2.0-beta.3
   url_launcher: ^6.3.0
   share_plus: ^10.0.2
   package_info_plus: ^8.0.0
