@@ -4,7 +4,7 @@
     <!-- 应用内检查更新：下载 APK 后拉起安装 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
-        android:label="ZCode 远程"
+        android:label="ZCode远程客户端"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

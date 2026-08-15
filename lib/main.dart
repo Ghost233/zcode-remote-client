@@ -25,7 +25,7 @@ class ZCodeRemoteApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (_) => DeviceStore()..load(),
       child: MaterialApp(
-        title: 'ZCode Remote',
+        title: 'ZCode远程客户端',
         debugShowCheckedModeBanner: false,
         themeMode: ThemeMode.system,
         theme: ThemeData(

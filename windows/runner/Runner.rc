@@ -90,7 +90,7 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.charlotte" "\0"
-            VALUE "FileDescription", "zcode_remote_client" "\0"
+            VALUE "FileDescription", "ZCode远程客户端" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "zcode_remote_client" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.charlotte. All rights reserved." "\0"
