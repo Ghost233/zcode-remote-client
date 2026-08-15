@@ -37,10 +37,10 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
   @override
   void initState() {
     super.initState();
-    _urlController =
-        TextEditingController(text: widget.editing?.url ?? '');
-    _remarkController =
-        TextEditingController(text: widget.editing?.remark ?? '');
+    _urlController = TextEditingController(text: widget.editing?.url ?? '');
+    _remarkController = TextEditingController(
+      text: widget.editing?.remark ?? '',
+    );
     _parsedName = _derive(_urlController.text);
     _urlController.addListener(() {
       setState(() => _parsedName = _derive(_urlController.text));
@@ -64,22 +64,23 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
     final text = data?.text?.trim();
     if (text != null && text.isNotEmpty) {
       _urlController.text = text;
-      _urlController.selection =
-          TextSelection.collapsed(offset: text.length);
+      _urlController.selection = TextSelection.collapsed(offset: text.length);
     }
   }
 
   Future<void> _save() async {
     final url = _urlController.text.trim();
     if (url.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('请填写连接地址')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请填写连接地址')));
       return;
     }
     final uri = Uri.tryParse(url);
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('地址格式不正确，需要完整的 http(s) 链接')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('地址格式不正确，需要完整的 http(s) 链接')));
       return;
     }
     final store = context.read<DeviceStore>();
@@ -87,8 +88,7 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
     if (widget.editing == null) {
       await store.addDevice(url, remark: remark);
     } else {
-      await store.updateDevice(widget.editing!.id,
-          url: url, remark: remark);
+      await store.updateDevice(widget.editing!.id, url: url, remark: remark);
     }
     if (mounted) Navigator.of(context).pop();
   }
@@ -116,8 +116,10 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
               ),
             ),
             const SizedBox(height: 16),
-            Text(isEdit ? '编辑设备' : '添加设备',
-                style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              isEdit ? '编辑设备' : '添加设备',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 16),
             TextField(
               controller: _urlController,

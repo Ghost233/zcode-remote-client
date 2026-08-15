@@ -96,12 +96,15 @@ class DeviceSwitcherSheet extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontWeight:
-                              isCurrent ? FontWeight.w600 : FontWeight.normal,
+                          fontWeight: isCurrent
+                              ? FontWeight.w600
+                              : FontWeight.normal,
                         ),
                       ),
                       subtitle: Text(
-                        isOpen ? '${store.subtitle(d)} · 会话保持中' : store.subtitle(d),
+                        isOpen
+                            ? '${store.subtitle(d)} · 会话保持中'
+                            : store.subtitle(d),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -146,7 +149,7 @@ class DeviceSwitcherSheet extends StatelessWidget {
                     store.setBubbleEnabled(false);
                   },
                   icon: const Icon(Icons.visibility_off_outlined, size: 18),
-                  label: const Text('隐藏悬浮球'),
+                  label: const Text('隐藏控制栏'),
                 ),
               ],
             ),

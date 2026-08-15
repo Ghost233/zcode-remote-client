@@ -10,28 +10,28 @@ class DeviceStore extends ChangeNotifier {
   static const _kDevices = 'devices_v1';
   static const _kCurrent = 'current_device_id';
   static const _kBubbleEnabled = 'bubble_enabled';
-  static const _kBubbleDx = 'bubble_dx';
-  static const _kBubbleDy = 'bubble_dy';
   static const _kToolbarDx = 'toolbar_dx';
   static const _kToolbarDy = 'toolbar_dy';
   static const _kPageZoom = 'page_zoom';
   static const _kViewZoom = 'view_zoom';
+  static const _kDesktopMode = 'desktop_mode';
 
   List<RemoteDevice> devices = [];
   String? currentId;
+
+  /// 悬浮控制栏（悬浮球+工具栏二合一）是否显示。
   bool bubbleEnabled = true;
 
-  /// 悬浮球位置（相对屏幕的 0..1 比例），dx 只会吸附到 0 或 1。
-  double? bubbleDx;
-  double? bubbleDy;
-
-  /// 工具栏位置（0..1 比例），dx 只会吸附到 0 或 1，默认右侧。
+  /// 悬浮控制栏位置（0..1 比例），dx 只会吸附到 0 或 1，默认右侧。
   double? toolbarDx;
   double? toolbarDy;
 
   /// 保存的缩放比例：当前会话内刷新后复用，切换会话时重置为 1.0。
   double savedPageZoom = 1.0;
   double savedViewZoom = 1.0;
+
+  /// 桌面模式：WebView 用桌面版 UA 请求站点，全局偏好。
+  bool desktopMode = false;
 
   RemoteDevice? get current {
     if (currentId == null) return null;
@@ -56,19 +56,20 @@ class DeviceStore extends ChangeNotifier {
       currentId = devices.first.id;
     }
     bubbleEnabled = prefs.getBool(_kBubbleEnabled) ?? true;
-    bubbleDx = prefs.getDouble(_kBubbleDx);
-    bubbleDy = prefs.getDouble(_kBubbleDy);
     toolbarDx = prefs.getDouble(_kToolbarDx);
     toolbarDy = prefs.getDouble(_kToolbarDy);
     savedPageZoom = prefs.getDouble(_kPageZoom) ?? 1.0;
     savedViewZoom = prefs.getDouble(_kViewZoom) ?? 1.0;
+    desktopMode = prefs.getBool(_kDesktopMode) ?? false;
     notifyListeners();
   }
 
   Future<void> _saveDevices() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-        _kDevices, jsonEncode(devices.map((e) => e.toJson()).toList()));
+      _kDevices,
+      jsonEncode(devices.map((e) => e.toJson()).toList()),
+    );
   }
 
   Future<void> _saveCurrent() async {
@@ -83,8 +84,9 @@ class DeviceStore extends ChangeNotifier {
     final trimmed = url.trim();
     final mid = RemoteDevice.midFromUrl(trimmed);
     final id = mid ?? 'd_${DateTime.now().microsecondsSinceEpoch}';
-    final cleanRemark =
-        (remark == null || remark.trim().isEmpty) ? null : remark.trim();
+    final cleanRemark = (remark == null || remark.trim().isEmpty)
+        ? null
+        : remark.trim();
     final now = DateTime.now();
 
     final idx = devices.indexWhere((d) => d.id == id);
@@ -166,14 +168,6 @@ class DeviceStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setBubblePosition(double dx, double dy) async {
-    bubbleDx = dx;
-    bubbleDy = dy;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_kBubbleDx, dx);
-    await prefs.setDouble(_kBubbleDy, dy);
-  }
-
   Future<void> setToolbarPosition(double dx, double dy) async {
     toolbarDx = dx;
     toolbarDy = dy;
@@ -189,6 +183,13 @@ class DeviceStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_kPageZoom, pageZoom);
     await prefs.setDouble(_kViewZoom, viewZoom);
+  }
+
+  Future<void> setDesktopMode(bool enabled) async {
+    desktopMode = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kDesktopMode, enabled);
+    notifyListeners();
   }
 
   /// 列表展示名：用户备注 > URL name 参数 > mid 短码 > host。

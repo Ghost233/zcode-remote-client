@@ -37,8 +37,9 @@ class SettingsPage extends StatelessWidget {
   Future<void> _copyUrl(BuildContext context, RemoteDevice device) async {
     await Clipboard.setData(ClipboardData(text: device.url));
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已复制完整地址（含连接凭证，注意勿外泄）')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已复制完整地址（含连接凭证，注意勿外泄）')));
     }
   }
 
@@ -52,8 +53,10 @@ class SettingsPage extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Text('已保存的远程地址',
-                  style: Theme.of(context).textTheme.titleSmall),
+              child: Text(
+                '已保存的远程地址',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
             ),
             if (store.devices.isEmpty)
               const Padding(
@@ -71,8 +74,11 @@ class SettingsPage extends StatelessWidget {
                         ? Theme.of(context).colorScheme.primary
                         : null,
                   ),
-                  title: Text(store.displayName(d),
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  title: Text(
+                    store.displayName(d),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   subtitle: Text(
                     '${store.subtitle(d)} · 添加于 ${d.addedAt.toLocal().toString().substring(0, 16)}',
                     maxLines: 1,
@@ -119,8 +125,8 @@ class SettingsPage extends StatelessWidget {
               child: Text('通用', style: Theme.of(context).textTheme.titleSmall),
             ),
             SwitchListTile(
-              title: const Text('显示悬浮球'),
-              subtitle: const Text('关闭后屏幕边缘会保留一个细把手，点击可恢复'),
+              title: const Text('显示悬浮控制栏'),
+              subtitle: const Text('悬浮球与工具栏二合一；关闭后屏幕边缘会保留一个细把手，点击可恢复'),
               value: store.bubbleEnabled,
               onChanged: (v) => store.setBubbleEnabled(v),
             ),

@@ -24,23 +24,23 @@ class RemoteDevice {
   DateTime lastOpenedAt;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'url': url,
-        'remark': remark,
-        'addedAt': addedAt.toIso8601String(),
-        'lastOpenedAt': lastOpenedAt.toIso8601String(),
-      };
+    'id': id,
+    'url': url,
+    'remark': remark,
+    'addedAt': addedAt.toIso8601String(),
+    'lastOpenedAt': lastOpenedAt.toIso8601String(),
+  };
 
   factory RemoteDevice.fromJson(Map<String, dynamic> json) => RemoteDevice(
-        id: json['id'] as String,
-        url: json['url'] as String,
-        remark: json['remark'] as String?,
-        addedAt: DateTime.tryParse(json['addedAt'] as String? ?? '') ??
-            DateTime.now(),
-        lastOpenedAt:
-            DateTime.tryParse(json['lastOpenedAt'] as String? ?? '') ??
-                DateTime.now(),
-      );
+    id: json['id'] as String,
+    url: json['url'] as String,
+    remark: json['remark'] as String?,
+    addedAt:
+        DateTime.tryParse(json['addedAt'] as String? ?? '') ?? DateTime.now(),
+    lastOpenedAt:
+        DateTime.tryParse(json['lastOpenedAt'] as String? ?? '') ??
+        DateTime.now(),
+  );
 
   /// 从 URL query 中取 mid 参数。
   static String? midFromUrl(String raw) {

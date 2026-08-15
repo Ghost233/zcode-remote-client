@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -8,15 +10,16 @@ import '../services/device_store.dart';
 import '../widgets/browser_view.dart';
 import '../widgets/device_edit_sheet.dart';
 import '../widgets/device_switcher_sheet.dart';
-import '../widgets/floating_bubble.dart';
+import '../widgets/floating_dock.dart';
 import '../widgets/glass.dart';
-import '../widgets/glass_toolbar.dart';
 import 'settings_page.dart';
 
-/// 首页：全屏浏览器 + 悬浮玻璃工具栏 + 可拖拽悬浮球。
+/// 首页：全屏浏览器 + 悬浮控制栏。
 ///
-/// 多台设备的 WebView 通过 IndexedStack 保活，切换不断连；
-/// 移动端整体包在 SafeArea 里，避开刘海/灵动岛和底部手势区。
+/// 多台设备的 WebView 通过 IndexedStack 保活，切换不断连。
+/// 系统栏避让策略：iOS 网页层整体包 SafeArea 避开刘海/灵动岛和底部
+/// 手势区；Android edge-to-edge 下网页完全铺满（状态栏/手势条悬浮其上，
+/// 消除顶部留白），悬浮控制栏自身始终避让系统栏。
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -40,9 +43,11 @@ class _HomePageState extends State<HomePage> {
       final id = store.currentId;
       if (id != null) {
         // 启动时用保存的缩放比例初始化首个会话。
-        _open(id,
-            initialPageZoom: store.savedPageZoom,
-            initialViewZoom: store.savedViewZoom);
+        _open(
+          id,
+          initialPageZoom: store.savedPageZoom,
+          initialViewZoom: store.savedViewZoom,
+        );
       }
     });
   }
@@ -76,10 +81,7 @@ class _HomePageState extends State<HomePage> {
     final store = context.read<DeviceStore>();
     final id = store.currentId;
     if (id == null) return;
-    store.setZooms(
-      _pageZooms[id]?.value ?? 1.0,
-      _viewZooms[id]?.value ?? 1.0,
-    );
+    store.setZooms(_pageZooms[id]?.value ?? 1.0, _viewZooms[id]?.value ?? 1.0);
   }
 
   Future<void> _selectDevice(RemoteDevice device) async {
@@ -133,73 +135,104 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// 桌面模式切换后重建当前会话：换新 GlobalKey 强制 WebView 重新创建，
+  /// 使新的 User-Agent 生效（UA 无法对已有 WebView 动态回退），缩放比例保留。
+  void _recreateCurrentSession() {
+    final store = context.read<DeviceStore>();
+    final id = store.currentId;
+    if (id == null || !_openIds.contains(id)) return;
+    setState(() {
+      _controllers.remove(id);
+      _viewKeys[id] = GlobalKey<BrowserViewState>();
+    });
+  }
+
+  SystemUiOverlayStyle _systemOverlayStyle(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    return SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      // Android 状态栏图标颜色
+      statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+      // iOS 状态栏前景
+      statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarContrastEnforced: false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.watch<DeviceStore>();
     final currentId = store.currentId;
-    final currentIndex =
-        currentId != null ? _openIds.indexOf(currentId) : -1;
+    final currentIndex = currentId != null ? _openIds.indexOf(currentId) : -1;
+
+    // Android edge-to-edge：网页层完全铺满，不做系统栏避让（否则状态栏
+    // 区域会显出一条留白）；iOS 保持避让刘海/灵动岛与底部手势区。
+    final webSafeArea = !Platform.isAndroid;
 
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _onSystemBack();
       },
-      child: Scaffold(
-        // 键盘弹出时整体收缩，工具栏随之浮到键盘上方。
-        resizeToAvoidBottomInset: true,
-        body: SafeArea(
-          child: Stack(
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: _systemOverlayStyle(Theme.of(context).brightness),
+        child: Scaffold(
+          // 键盘弹出时整体收缩，控制栏随之浮到键盘上方。
+          resizeToAvoidBottomInset: true,
+          body: Stack(
             children: [
               // 网页层：各设备会话保活
-              if (_openIds.isNotEmpty)
-                IndexedStack(
-                  index: currentIndex >= 0 ? currentIndex : 0,
-                  children: [
-                    for (final id in _openIds)
-                      _buildBrowser(store, id),
-                  ],
-                )
-              else
-                _buildEmptyState(store),
-
-              // 悬浮玻璃工具栏：默认右边缘，可拖动吸附两侧
-              Positioned.fill(
-                child: GlassToolbar(
-                  controller: _currentController(store),
-                  viewKey:
-                      currentId != null ? _viewKeys[currentId] : null,
-                  pageZoom:
-                      currentId != null && _pageZooms.containsKey(currentId)
-                          ? _pageZooms[currentId]!
-                          : ValueNotifier(1.0),
-                  viewZoom:
-                      currentId != null && _viewZooms.containsKey(currentId)
-                          ? _viewZooms[currentId]!
-                          : ValueNotifier(1.0),
-                  onReplaceAddress: () {
-                    final device = store.current;
-                    if (device != null) {
-                      DeviceEditSheet.show(context, editing: device);
-                    }
-                  },
-                ),
+              SafeArea(
+                top: webSafeArea,
+                bottom: webSafeArea,
+                left: webSafeArea,
+                right: webSafeArea,
+                child: _openIds.isNotEmpty
+                    ? IndexedStack(
+                        index: currentIndex >= 0 ? currentIndex : 0,
+                        children: [
+                          for (final id in _openIds) _buildBrowser(store, id),
+                        ],
+                      )
+                    : _buildEmptyState(store),
               ),
 
-              // 可拖拽悬浮球（恒在最上层）
+              // 悬浮控制栏（悬浮球+工具栏二合一）：默认右边缘收起为球，
+              // 点击展开；可拖动吸附两侧，位置持久化；始终避让系统栏。
               Positioned.fill(
-                child: FloatingBubble(
-                  onTap: () => DeviceSwitcherSheet.show(
-                    context,
-                    openIds: _openIds.toSet(),
-                    onSelect: _selectDevice,
-                    onCloseSession: _closeSession,
-                    onOpenSettings: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const SettingsPage()),
-                      );
+                child: SafeArea(
+                  child: FloatingDock(
+                    controller: _currentController(store),
+                    viewKey: currentId != null ? _viewKeys[currentId] : null,
+                    pageZoom:
+                        currentId != null && _pageZooms.containsKey(currentId)
+                        ? _pageZooms[currentId]!
+                        : ValueNotifier(1.0),
+                    viewZoom:
+                        currentId != null && _viewZooms.containsKey(currentId)
+                        ? _viewZooms[currentId]!
+                        : ValueNotifier(1.0),
+                    onReplaceAddress: () {
+                      final device = store.current;
+                      if (device != null) {
+                        DeviceEditSheet.show(context, editing: device);
+                      }
                     },
+                    onOpenSwitcher: () => DeviceSwitcherSheet.show(
+                      context,
+                      openIds: _openIds.toSet(),
+                      onSelect: _selectDevice,
+                      onCloseSession: _closeSession,
+                      onOpenSettings: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SettingsPage(),
+                          ),
+                        );
+                      },
+                    ),
+                    onDesktopModeChanged: _recreateCurrentSession,
                   ),
                 ),
               ),
@@ -245,8 +278,7 @@ class _HomePageState extends State<HomePage> {
       },
       onTitleChanged: (title) =>
           context.read<DeviceStore>().maybeFillRemarkFromTitle(id, title),
-      onReplaceAddress: () =>
-          DeviceEditSheet.show(context, editing: device),
+      onReplaceAddress: () => DeviceEditSheet.show(context, editing: device),
     );
   }
 
@@ -260,11 +292,16 @@ class _HomePageState extends State<HomePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.terminal_rounded,
-                  size: 52, color: Theme.of(context).colorScheme.primary),
+              Icon(
+                Icons.terminal_rounded,
+                size: 52,
+                color: Theme.of(context).colorScheme.primary,
+              ),
               const SizedBox(height: 16),
-              Text('ZCode 远程客户端',
-                  style: Theme.of(context).textTheme.titleLarge),
+              Text(
+                'ZCode 远程客户端',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
               const SizedBox(height: 8),
               Text(
                 hasDevices

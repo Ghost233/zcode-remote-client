@@ -3,11 +3,18 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/remote_device.dart';
+import '../services/device_store.dart';
 import 'glass.dart';
+
+/// 桌面模式使用的桌面版 Chrome UA（Windows）。
+const kDesktopUserAgent =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /// 单个设备对应的完整功能浏览器视图。
 ///
@@ -95,12 +102,14 @@ class BrowserViewState extends State<BrowserView>
       await _injectPanLayer(c);
     } else {
       await c.evaluateJavascript(
-          source: 'window.__zcodePanCleanup && window.__zcodePanCleanup();');
+        source: 'window.__zcodePanCleanup && window.__zcodePanCleanup();',
+      );
     }
   }
 
   Future<void> _injectPanLayer(InAppWebViewController c) {
-    return c.evaluateJavascript(source: '''
+    return c.evaluateJavascript(
+      source: '''
 (function() {
   try {
     window.__zcodePanCleanup && window.__zcodePanCleanup();
@@ -130,7 +139,8 @@ class BrowserViewState extends State<BrowserView>
     window.__zcodePanCleanup = function() { el.remove(); window.__zcodePanCleanup = null; };
   } catch (e) {}
 })();
-''');
+''',
+    );
   }
 
   /// 页面缩放（布局重排，等效浏览器整页缩放）。
@@ -150,14 +160,17 @@ class BrowserViewState extends State<BrowserView>
         await c.setSettings(settings: settings);
       }
     } else {
-      await c.evaluateJavascript(source: '''
+      await c.evaluateJavascript(
+        source:
+            '''
 (function() {
   try {
     document.documentElement.style.zoom = '$z';
     if (document.body) document.body.style.zoom = '';
   } catch (e) {}
 })();
-''');
+''',
+      );
     }
   }
 
@@ -167,7 +180,9 @@ class BrowserViewState extends State<BrowserView>
     final c = _controller;
     if (c == null) return;
     final z = widget.viewZoom.value;
-    await c.evaluateJavascript(source: '''
+    await c.evaluateJavascript(
+      source:
+          '''
 (function() {
   try {
     var b = document.body, d = document.documentElement;
@@ -178,7 +193,8 @@ class BrowserViewState extends State<BrowserView>
     d.style.minWidth = ($z * 100) + 'vw';
   } catch (e) {}
 })();
-''');
+''',
+    );
   }
 
   Future<void> reload() async {
@@ -209,13 +225,15 @@ class BrowserViewState extends State<BrowserView>
   }
 
   Future<void> copyAllText() async {
-    final text = await _controller?.evaluateJavascript(source: '''
+    final text = await _controller?.evaluateJavascript(
+      source: '''
 (function() {
   var sel = window.getSelection ? window.getSelection().toString() : '';
   if (sel && sel.length > 0) return sel;
   return document.body ? (document.body.innerText || '') : '';
 })();
-''');
+''',
+    );
     if (text is String && text.isNotEmpty) {
       await Clipboard.setData(ClipboardData(text: text));
       _toast('已复制页面文本');
@@ -227,8 +245,7 @@ class BrowserViewState extends State<BrowserView>
   Future<void> openExternal() async {
     final url = await currentUrl();
     if (url != null) {
-      await launchUrl(Uri.parse(url),
-          mode: LaunchMode.externalApplication);
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     }
   }
 
@@ -236,11 +253,13 @@ class BrowserViewState extends State<BrowserView>
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(
-        content: Text(msg),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 1),
-      ));
+      ..showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 1),
+        ),
+      );
   }
 
   // ---------- 长按/右键菜单 ----------
@@ -254,7 +273,8 @@ class BrowserViewState extends State<BrowserView>
 
   Future<void> _copySelectionOrText() async {
     final selected = await _controller?.evaluateJavascript(
-        source: 'window.getSelection ? window.getSelection().toString() : ""');
+      source: 'window.getSelection ? window.getSelection().toString() : ""',
+    );
     final text = (selected is String && selected.isNotEmpty)
         ? selected
         : _lastHitTest?.extra;
@@ -289,7 +309,9 @@ class BrowserViewState extends State<BrowserView>
   // ---------- JS 弹窗 ----------
 
   Future<JsAlertResponse?> _onJsAlert(
-      InAppWebViewController c, JsAlertRequest req) async {
+    InAppWebViewController c,
+    JsAlertRequest req,
+  ) async {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -303,11 +325,15 @@ class BrowserViewState extends State<BrowserView>
       ),
     );
     return JsAlertResponse(
-        handledByClient: true, action: JsAlertResponseAction.CONFIRM);
+      handledByClient: true,
+      action: JsAlertResponseAction.CONFIRM,
+    );
   }
 
   Future<JsConfirmResponse?> _onJsConfirm(
-      InAppWebViewController c, JsConfirmRequest req) async {
+    InAppWebViewController c,
+    JsConfirmRequest req,
+  ) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -333,7 +359,9 @@ class BrowserViewState extends State<BrowserView>
   }
 
   Future<JsPromptResponse?> _onJsPrompt(
-      InAppWebViewController c, JsPromptRequest req) async {
+    InAppWebViewController c,
+    JsPromptRequest req,
+  ) async {
     final controller = TextEditingController(text: req.defaultValue ?? '');
     final ok = await showDialog<bool>(
       context: context,
@@ -393,6 +421,11 @@ class BrowserViewState extends State<BrowserView>
             allowsBackForwardNavigationGestures: true,
             isFraudulentWebsiteWarningEnabled: false,
             disableContextMenu: false,
+            // 桌面模式：用桌面 Chrome UA 请求站点（UA 只能在创建时设置，
+            // 切换时由外部重建会话生效）。
+            userAgent: context.watch<DeviceStore>().desktopMode
+                ? kDesktopUserAgent
+                : null,
           ),
           pullToRefreshController: _pullToRefresh,
           contextMenu: ContextMenu(
@@ -403,14 +436,14 @@ class BrowserViewState extends State<BrowserView>
               _lastHitTest = hitTestResult;
             },
             menuItems: [
+              ContextMenuItem(id: 1, title: '复制', action: _copySelectionOrText),
+              ContextMenuItem(id: 2, title: '复制链接', action: _copyHitLink),
+              ContextMenuItem(id: 3, title: '分享', action: _shareHitLink),
               ContextMenuItem(
-                  id: 1, title: '复制', action: _copySelectionOrText),
-              ContextMenuItem(
-                  id: 2, title: '复制链接', action: _copyHitLink),
-              ContextMenuItem(
-                  id: 3, title: '分享', action: _shareHitLink),
-              ContextMenuItem(
-                  id: 4, title: '在浏览器打开', action: _openHitLinkExternal),
+                id: 4,
+                title: '在浏览器打开',
+                action: _openHitLinkExternal,
+              ),
             ],
           ),
           onWebViewCreated: (controller) {
@@ -454,15 +487,20 @@ class BrowserViewState extends State<BrowserView>
           },
           onDownloadStartRequest: (controller, request) async {
             // 下载交给系统浏览器/下载器处理。
-            await launchUrl(request.url,
-                mode: LaunchMode.externalApplication);
+            await launchUrl(request.url, mode: LaunchMode.externalApplication);
             _toast('已交给系统浏览器下载');
           },
           shouldOverrideUrlLoading: (controller, action) async {
             final uri = action.request.url;
             if (uri == null) return NavigationActionPolicy.ALLOW;
             const allowed = {
-              'http', 'https', 'about', 'data', 'blob', 'file', 'javascript',
+              'http',
+              'https',
+              'about',
+              'data',
+              'blob',
+              'file',
+              'javascript',
             };
             if (!allowed.contains(uri.scheme.toLowerCase())) {
               // mailto/tel/intent/自定义协议 → 系统处理。
@@ -489,8 +527,7 @@ class BrowserViewState extends State<BrowserView>
               value: _progress,
               minHeight: 2.5,
               backgroundColor: Colors.transparent,
-              valueColor:
-                  const AlwaysStoppedAnimation(Color(0xFF5B5CE2)),
+              valueColor: const AlwaysStoppedAnimation(Color(0xFF5B5CE2)),
             ),
           ),
 
@@ -504,15 +541,22 @@ class BrowserViewState extends State<BrowserView>
                   padding: const EdgeInsets.all(24),
                   child: GlassContainer(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 28),
+                      horizontal: 24,
+                      vertical: 28,
+                    ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.cloud_off_rounded,
-                            size: 48, color: Colors.grey),
+                        const Icon(
+                          Icons.cloud_off_rounded,
+                          size: 48,
+                          color: Colors.grey,
+                        ),
                         const SizedBox(height: 16),
-                        Text('页面加载失败',
-                            style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          '页面加载失败',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         const SizedBox(height: 8),
                         Text(
                           _mainFrameError!.description,
