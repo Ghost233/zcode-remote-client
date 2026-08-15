@@ -122,6 +122,11 @@ jobs:
       - run: flutter pub get
 
       - run: flutter build windows --release --obfuscate --split-debug-info=build/symbols-windows
+        env:
+          # flutter_inappwebview_windows 用 <experimental/coroutine>（/await），
+          # 最新 MSVC STL 把它升级成硬错误 STL1011；微软官方开关压掉，
+          # 通过 CL 环境变量注入对插件子工程也生效。
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
 
       # 产物是 exe + dll + data 一整套，整个 Release 目录打成 zip
       - name: 打 zip
