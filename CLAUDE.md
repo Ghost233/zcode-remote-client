@@ -37,9 +37,12 @@ for abi in arm64-v8a armeabi-v7a x86_64; do
   cp build/app/outputs/flutter-apk/app-$abi-release.apk \
      /tmp/zcode-remote-client-android-$abi-vX.Y.Z.apk
 done
-cd build/macos/Build/Products/Release
-zip -r -q -y zcode-remote-client-macos-vX.Y.Z.zip zcode_remote_client.app
-cd -
+# 打 DMG（含拖拽安装的 Applications 符号链接）
+DMGROOT=/tmp/dmgroot; rm -rf "$DMGROOT" && mkdir -p "$DMGROOT"
+cp -R build/macos/Build/Products/Release/zcode_remote_client.app "$DMGROOT/"
+ln -s /Applications "$DMGROOT/Applications"
+hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
+  -format UDZO -ov /tmp/zcode-remote-client-macos-vX.Y.Z.dmg
 
 # 5. 提交代码并推送
 git add -A && git commit -m "..." && git push origin main
@@ -49,7 +52,7 @@ gh release create vX.Y.Z \
   /tmp/zcode-remote-client-android-arm64-v8a-vX.Y.Z.apk \
   /tmp/zcode-remote-client-android-armeabi-v7a-vX.Y.Z.apk \
   /tmp/zcode-remote-client-android-x86_64-vX.Y.Z.apk \
-  build/macos/Build/Products/Release/zcode-remote-client-macos-vX.Y.Z.zip \
+  /tmp/zcode-remote-client-macos-vX.Y.Z.dmg \
   --title "vX.Y.Z" --notes "更新说明...\
   （注意：gh release upload 不支持 # 改名语法，必须先物理改名再上传）"
 ```
