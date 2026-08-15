@@ -1,7 +1,9 @@
 # 发版流水线（版本号完全由代码定义）：
 # - 推 main 且版本有更新（pubspec.yaml / RELEASE_NOTES.md 变化）→ 自动出
 #   全平台包并发布 Release，tag 由 CI 按 pubspec 版本打，不手写 tag。
-# - 手动触发(workflow_dispatch) → 只构建验证，不发布。
+# - 版本升了但构建失败时，后续修复提交（源码/平台配置/本工作流）会自动
+#   重新构建发布，无需再改版本号；版本与最新 Release 一致后自动跳过。
+# - 手动触发(workflow_dispatch) → 强制构建；版本与最新 Release 不同才发布。
 # - 只允许 main 分支运行，不支持指定 commit 构建。
 #
 # 版本三要素（全部来自被编译的 commit，无人工维护项）：
@@ -14,7 +16,14 @@ name: release
 on:
   push:
     branches: [main]
-    paths: ['pubspec.yaml', 'RELEASE_NOTES.md']
+    paths:
+      - 'pubspec.yaml'
+      - 'RELEASE_NOTES.md'
+      - 'lib/**'
+      - 'android/**'
+      - 'macos/**'
+      - 'windows/**'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 permissions:
