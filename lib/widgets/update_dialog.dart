@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -98,6 +99,12 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
 
   Future<void> _start() async {
     try {
+      // 按设备实际支持的 CPU 架构挑对应 APK（发布页挂多架构包）。
+      var abis = const <String>[];
+      try {
+        final info = await DeviceInfoPlugin().androidInfo;
+        abis = info.supportedAbis;
+      } catch (_) {}
       final path = await UpdateChecker.downloadAndroidApk(widget.release, (
         received,
         total,
@@ -108,7 +115,7 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
             _total = total > 0 ? total : 1;
           });
         }
-      });
+      }, abis: abis);
       if (path == null) throw StateError('下载失败');
       if (!mounted) return;
       Navigator.of(context).pop();

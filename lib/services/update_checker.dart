@@ -37,12 +37,22 @@ class AppRelease {
   String get version =>
       tagName.startsWith('v') ? tagName.substring(1) : tagName;
 
-  ReleaseAsset? get androidApk {
-    for (final a in assets) {
-      if (a.name.endsWith('.apk')) return a;
+  /// 按设备支持的 ABI 优先级挑选 APK（发布页可能同时挂多个架构的包）。
+  /// [abis] 形如 ['arm64-v8a', 'armeabi-v7a']（Android 取 supportedAbis）。
+  /// 都匹配不到时退回第一个 .apk。
+  ReleaseAsset? androidApkFor(List<String> abis) {
+    final apks = assets.where((a) => a.name.endsWith('.apk')).toList();
+    if (apks.isEmpty) return null;
+    for (final abi in abis) {
+      for (final apk in apks) {
+        if (apk.name.contains(abi)) return apk;
+      }
     }
-    return null;
+    return apks.first;
   }
+
+  /// 兼容旧调用：不指定 ABI 时取第一个 APK。
+  ReleaseAsset? get androidApk => androidApkFor(const []);
 }
 
 class UpdateChecker {
@@ -104,12 +114,13 @@ class UpdateChecker {
     return false;
   }
 
-  /// 下载 release 里的 APK 到临时目录，返回文件路径；失败返回 null。
+  /// 下载匹配设备 ABI 的 APK 到临时目录，返回文件路径；失败返回 null。
   static Future<String?> downloadAndroidApk(
     AppRelease release,
-    void Function(int received, int total) onProgress,
-  ) async {
-    final asset = release.androidApk;
+    void Function(int received, int total) onProgress, {
+    List<String> abis = const [],
+  }) async {
+    final asset = release.androidApkFor(abis);
     if (asset == null) return null;
     final dir = await getTemporaryDirectory();
     final file = File('${dir.path}/${asset.name}');

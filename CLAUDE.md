@@ -33,8 +33,10 @@ codesign --force --deep --sign - "$APP"
 # 瘦身后务必 open "$APP" 验证能启动
 
 # 4. 附件统一命名：zcode-remote-client-<平台>-vX.Y.Z.<ext>
-cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-   /tmp/zcode-remote-client-android-arm64-vX.Y.Z.apk
+for abi in arm64-v8a armeabi-v7a x86_64; do
+  cp build/app/outputs/flutter-apk/app-$abi-release.apk \
+     /tmp/zcode-remote-client-android-$abi-vX.Y.Z.apk
+done
 cd build/macos/Build/Products/Release
 zip -r -q -y zcode-remote-client-macos-vX.Y.Z.zip zcode_remote_client.app
 cd -
@@ -44,7 +46,9 @@ git add -A && git commit -m "..." && git push origin main
 
 # 6. 发布 Release（tag 与 pubspec 版本一致）
 gh release create vX.Y.Z \
-  /tmp/zcode-remote-client-android-arm64-vX.Y.Z.apk \
+  /tmp/zcode-remote-client-android-arm64-v8a-vX.Y.Z.apk \
+  /tmp/zcode-remote-client-android-armeabi-v7a-vX.Y.Z.apk \
+  /tmp/zcode-remote-client-android-x86_64-vX.Y.Z.apk \
   build/macos/Build/Products/Release/zcode-remote-client-macos-vX.Y.Z.zip \
   --title "vX.Y.Z" --notes "更新说明...\
   （注意：gh release upload 不支持 # 改名语法，必须先物理改名再上传）"
@@ -57,3 +61,4 @@ gh release create vX.Y.Z \
 - iOS 需个人证书在 Xcode 自行签名打包；Windows 需 Windows 机器 `flutter build windows`
 - 应用内更新从 v1.1.1 起生效；更早版本需手动覆盖安装一次
 - 更新源配置在 `lib/services/update_checker.dart` 顶部的 `kRepoOwner` / `kRepoName`
+- 发布页同时挂三个架构的 APK；更新器按设备 `supportedAbis` 选包。**arm64 必须最先上传**（旧版本更新器固定取第一个 .apk，arm64 用户占绝对多数）
