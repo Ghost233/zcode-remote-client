@@ -32,6 +32,7 @@ class DeviceSwitcherSheet extends StatelessWidget {
     return showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      barrierColor: kGlassBarrierColor,
       isScrollControlled: true,
       builder: (_) => DeviceSwitcherSheet(
         openIds: openIds,

@@ -570,8 +570,10 @@ class BrowserViewState extends State<BrowserView>
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                         const SizedBox(height: 20),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.center,
                           children: [
                             OutlinedButton.icon(
                               onPressed: reload,

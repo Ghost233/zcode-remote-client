@@ -15,22 +15,36 @@ ZCode 远程终端跨平台客户端（iOS / Android / macOS / Windows），内�
 # 1. 升版本号（+0.0.1 / build +1）
 #    编辑 pubspec.yaml: version: X.Y.Z+N
 
-# 2. 构建 release 产物
-flutter build apk --release
-flutter build macos --release
+# 2. 构建 release 产物（单架构瘦身 + 混淆）
+#    Android 只发 arm64 包（约 18MB；通用三架构包 53MB 没必要）
+flutter build apk --release --split-per-abi --obfuscate \
+  --split-debug-info=build/symbols-android
+flutter build macos --release --obfuscate \
+  --split-debug-info=build/symbols-macos
 
-# 3. 附件统一命名：zcode-remote-client-<平台>-vX.Y.Z.<ext>
-cp build/app/outputs/flutter-apk/app-release.apk /tmp/zcode-remote-client-android-vX.Y.Z.apk
+# 3. macOS 剥掉 Intel 架构（默认 universal 双架构，体积翻倍）
+APP=build/macos/Build/Products/Release/zcode_remote_client.app
+find "$APP" -type f \( -name 'zcode_remote_client' -o -name 'App' -o -name 'FlutterMacOS' \) |
+  while read f; do
+    lipo -info "$f" 2>/dev/null | grep -q x86_64 &&
+      lipo -remove x86_64 -output /tmp/_thin "$f" && mv /tmp/_thin "$f"
+  done
+codesign --force --deep --sign - "$APP"
+# 瘦身后务必 open "$APP" 验证能启动
+
+# 4. 附件统一命名：zcode-remote-client-<平台>-vX.Y.Z.<ext>
+cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+   /tmp/zcode-remote-client-android-arm64-vX.Y.Z.apk
 cd build/macos/Build/Products/Release
 zip -r -q -y zcode-remote-client-macos-vX.Y.Z.zip zcode_remote_client.app
 cd -
 
-# 4. 提交代码并推送
+# 5. 提交代码并推送
 git add -A && git commit -m "..." && git push origin main
 
-# 5. 发布 Release（tag 与 pubspec 版本一致）
+# 6. 发布 Release（tag 与 pubspec 版本一致）
 gh release create vX.Y.Z \
-  /tmp/zcode-remote-client-android-vX.Y.Z.apk \
+  /tmp/zcode-remote-client-android-arm64-vX.Y.Z.apk \
   build/macos/Build/Products/Release/zcode-remote-client-macos-vX.Y.Z.zip \
   --title "vX.Y.Z" --notes "更新说明...\
   （注意：gh release upload 不支持 # 改名语法，必须先物理改名再上传）"

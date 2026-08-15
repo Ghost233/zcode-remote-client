@@ -236,6 +236,11 @@ class _HomePageState extends State<HomePage> {
                       },
                     ),
                     onDesktopModeChanged: _recreateCurrentSession,
+                    onOpenSettings: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const SettingsPage()),
+                      );
+                    },
                   ),
                 ),
               ),

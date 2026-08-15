@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../services/device_store.dart';
 import 'browser_view.dart';
 import 'glass.dart';
+import 'update_dialog.dart';
 
 /// 悬浮控制栏（悬浮球 + 工具栏二合一）。
 ///
@@ -26,6 +27,7 @@ class FloatingDock extends StatefulWidget {
     required this.onReplaceAddress,
     required this.onOpenSwitcher,
     required this.onDesktopModeChanged,
+    required this.onOpenSettings,
   });
 
   /// 当前页的 WebView 控制器（无打开会话时为 null）。
@@ -47,6 +49,9 @@ class FloatingDock extends StatefulWidget {
 
   /// 桌面模式切换后的回调（外部用它重建当前会话使 UA 生效）。
   final VoidCallback onDesktopModeChanged;
+
+  /// 打开设置页。
+  final VoidCallback onOpenSettings;
 
   @override
   State<FloatingDock> createState() => _FloatingDockState();
@@ -109,16 +114,25 @@ class _FloatingDockState extends State<FloatingDock> {
     ).clamp(_minZoom, _maxZoom);
   }
 
+  /// 「更多」面板：网页操作 + 偏好开关 + 应用入口（设置/检查更新）
+  /// 集中在一个地方，和专职的「切换设备」按钮不再混淆。
   void _showActions() {
     final view = widget.viewKey?.currentState;
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      barrierColor: kGlassBarrierColor,
       builder: (ctx) {
-        Widget item(IconData icon, String label, VoidCallback? action) {
+        Widget item(
+          IconData icon,
+          String label,
+          VoidCallback? action, {
+          Color? color,
+        }) {
           return ListTile(
-            leading: Icon(icon),
-            title: Text(label),
+            leading: Icon(icon, color: color),
+            title: Text(label, style: TextStyle(color: color)),
+            dense: true,
             onTap: action == null
                 ? null
                 : () {
@@ -128,55 +142,85 @@ class _FloatingDockState extends State<FloatingDock> {
           );
         }
 
+        Widget sectionLabel(String text) => Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(ctx).colorScheme.primary,
+            ),
+          ),
+        );
+
         return Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
           child: GlassContainer(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                item(
-                  Icons.link,
-                  '复制页面链接',
-                  view == null ? null : () => view.copyPageLink(),
-                ),
-                item(
-                  Icons.ios_share,
-                  '分享当前页面',
-                  view == null ? null : () => view.sharePage(),
-                ),
-                item(
-                  Icons.copy_all,
-                  '复制页面全部文本',
-                  view == null ? null : () => view.copyAllText(),
-                ),
-                item(
-                  Icons.open_in_new,
-                  '在系统浏览器中打开',
-                  view == null ? null : () => view.openExternal(),
-                ),
-                item(
-                  Icons.refresh,
-                  '重新加载',
-                  view == null ? null : () => view.reload(),
-                ),
-                // 桌面版网站：切换 UA，重建当前会话生效。
-                Consumer<DeviceStore>(
-                  builder: (ctx, store, _) => SwitchListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    secondary: const Icon(Icons.desktop_windows_outlined),
-                    title: const Text('桌面版网站'),
-                    value: store.desktopMode,
-                    onChanged: (v) {
-                      Navigator.of(ctx).pop();
-                      store.setDesktopMode(v).then((_) {
-                        widget.onDesktopModeChanged();
-                      });
-                    },
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            // 内容较多（三分区），小屏下超出弹窗高度时必须可滚动。
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  sectionLabel('网页'),
+                  item(
+                    Icons.link,
+                    '复制页面链接',
+                    view == null ? null : () => view.copyPageLink(),
                   ),
-                ),
-                item(Icons.edit_note, '替换此设备地址', widget.onReplaceAddress),
-              ],
+                  item(
+                    Icons.ios_share,
+                    '分享当前页面',
+                    view == null ? null : () => view.sharePage(),
+                  ),
+                  item(
+                    Icons.copy_all,
+                    '复制页面全部文本',
+                    view == null ? null : () => view.copyAllText(),
+                  ),
+                  item(
+                    Icons.open_in_new,
+                    '在系统浏览器中打开',
+                    view == null ? null : () => view.openExternal(),
+                  ),
+                  item(
+                    Icons.refresh,
+                    '重新加载',
+                    view == null ? null : () => view.reload(),
+                  ),
+                  item(Icons.edit_note, '替换此设备地址', widget.onReplaceAddress),
+                  const Divider(height: 6, indent: 16, endIndent: 16),
+                  sectionLabel('偏好'),
+                  // 桌面版网站：切换 UA，重建当前会话生效。
+                  Consumer<DeviceStore>(
+                    builder: (ctx, store, _) => SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                      ),
+                      secondary: const Icon(Icons.desktop_windows_outlined),
+                      title: const Text('桌面版网站'),
+                      dense: true,
+                      value: store.desktopMode,
+                      onChanged: (v) {
+                        Navigator.of(ctx).pop();
+                        store.setDesktopMode(v).then((_) {
+                          widget.onDesktopModeChanged();
+                        });
+                      },
+                    ),
+                  ),
+                  const Divider(height: 6, indent: 16, endIndent: 16),
+                  sectionLabel('应用'),
+                  item(Icons.settings_outlined, '设置', widget.onOpenSettings),
+                  item(
+                    Icons.system_update,
+                    '检查更新',
+                    () => checkForUpdates(ctx, manual: true),
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -322,75 +366,85 @@ class _FloatingDockState extends State<FloatingDock> {
   }
 
   /// 展开态：顶部拖拽把手 + 完整工具栏。
+  /// 限高 + 滚动：矮屏（横屏手机）下按钮再多也不能溢出。
   Widget _buildExpanded() {
     final controller = widget.controller;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _buildGrip(),
-        GlassIconButton(
-          icon: Icons.devices_rounded,
-          tooltip: '切换设备',
-          onPressed: widget.onOpenSwitcher,
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: _containerH > 0 ? _containerH : double.infinity,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildGrip(),
+            GlassIconButton(
+              icon: Icons.devices_rounded,
+              tooltip: '切换设备',
+              onPressed: widget.onOpenSwitcher,
+            ),
+            const _Divider(),
+            GlassIconButton(
+              icon: Icons.arrow_back_ios_new,
+              tooltip: '后退',
+              onPressed: controller == null
+                  ? null
+                  : () async {
+                      if (await controller.canGoBack()) controller.goBack();
+                    },
+            ),
+            GlassIconButton(
+              icon: Icons.arrow_forward_ios,
+              tooltip: '前进',
+              onPressed: controller == null
+                  ? null
+                  : () async {
+                      if (await controller.canGoForward()) {
+                        controller.goForward();
+                      }
+                    },
+            ),
+            GlassIconButton(
+              icon: Icons.refresh,
+              tooltip: '刷新',
+              onPressed: controller == null ? null : () => controller.reload(),
+            ),
+            _buildPanToggle(),
+            const _Divider(),
+            // 可视缩放：只放大可视范围，页面布局不变（放大镜图标）。
+            _zoomGroup(
+              notifier: widget.viewZoom,
+              step: 0.25,
+              zoomInIcon: Icons.zoom_in,
+              zoomOutIcon: Icons.zoom_out,
+              label: '可视缩放（布局不变）',
+            ),
+            const _Divider(),
+            // 页面缩放：页面自身放大缩小，布局重排（字体图标）。
+            _zoomGroup(
+              notifier: widget.pageZoom,
+              step: 0.1,
+              zoomInIcon: Icons.text_increase,
+              zoomOutIcon: Icons.text_decrease,
+              label: '页面缩放（布局重排）',
+            ),
+            const _Divider(),
+            GlassIconButton(
+              icon: Icons.more_horiz,
+              tooltip: '更多 / 设置',
+              onPressed: _showActions,
+            ),
+            GlassIconButton(
+              icon: Icons.keyboard_double_arrow_right,
+              tooltip: '收起为悬浮球',
+              onPressed: () {
+                setState(() => _expanded = false);
+                _armIdleTimers();
+              },
+            ),
+          ],
         ),
-        const _Divider(),
-        GlassIconButton(
-          icon: Icons.arrow_back_ios_new,
-          tooltip: '后退',
-          onPressed: controller == null
-              ? null
-              : () async {
-                  if (await controller.canGoBack()) controller.goBack();
-                },
-        ),
-        GlassIconButton(
-          icon: Icons.arrow_forward_ios,
-          tooltip: '前进',
-          onPressed: controller == null
-              ? null
-              : () async {
-                  if (await controller.canGoForward()) controller.goForward();
-                },
-        ),
-        GlassIconButton(
-          icon: Icons.refresh,
-          tooltip: '刷新',
-          onPressed: controller == null ? null : () => controller.reload(),
-        ),
-        _buildPanToggle(),
-        const _Divider(),
-        // 可视缩放：只放大可视范围，页面布局不变（放大镜图标）。
-        _zoomGroup(
-          notifier: widget.viewZoom,
-          step: 0.25,
-          zoomInIcon: Icons.zoom_in,
-          zoomOutIcon: Icons.zoom_out,
-          label: '可视缩放（布局不变）',
-        ),
-        const _Divider(),
-        // 页面缩放：页面自身放大缩小，布局重排（字体图标）。
-        _zoomGroup(
-          notifier: widget.pageZoom,
-          step: 0.1,
-          zoomInIcon: Icons.text_increase,
-          zoomOutIcon: Icons.text_decrease,
-          label: '页面缩放（布局重排）',
-        ),
-        const _Divider(),
-        GlassIconButton(
-          icon: Icons.more_horiz,
-          tooltip: '页面操作',
-          onPressed: _showActions,
-        ),
-        GlassIconButton(
-          icon: Icons.keyboard_double_arrow_right,
-          tooltip: '收起为悬浮球',
-          onPressed: () {
-            setState(() => _expanded = false);
-            _armIdleTimers();
-          },
-        ),
-      ],
+      ),
     );
   }
 
