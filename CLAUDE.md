@@ -26,10 +26,10 @@ git push origin v1.1.4
 ```
 
 Actions 自动完成：Android 三架构分包 + 混淆（正式签名）、macOS universal 剥
-arm64 / x86_64 各打 DMG、校验 tag 与 pubspec 版本一致（不一致直接失败）、
-创建 Release 并按固定顺序上传附件（**arm64 APK 第一个**，旧版本更新器固定
-取第一个 .apk）。在 Actions 页面可手动触发（workflow_dispatch）做只构建
-不发布的验证跑。
+arm64 / x86_64 各打 DMG、Windows x64 zip、校验 tag 与 pubspec 版本一致
+（不一致直接失败）、创建 Release 并按固定顺序上传附件（**arm64 APK 第一个**，
+旧版本更新器固定取第一个 .apk）。在 Actions 页面可手动触发
+（workflow_dispatch）做只构建不发布的验证跑。
 
 ## 注意事项
 
@@ -42,7 +42,8 @@ arm64 / x86_64 各打 DMG、校验 tag 与 pubspec 版本一致（不一致直�
    KEYSTORE_PASSWORD=$(cat ~/.keystores/zcode-remote-client/password.txt) \
    flutter build apk --release ...`
 - macOS 包未签名公证，首次打开需右键 → 打开
-- iOS 需个人证书在 Xcode 自行签名打包；Windows 需 Windows 机器 `flutter build windows`（如需可加到 CI，windows runner 同样免费）
+- Windows 产物为 zip（exe + dll + data 整套，未签名，SmartScreen 可能提示「仍要运行」）
+- iOS 需个人证书在 Xcode 自行签名打包，不在 CI 产物范围内
 - 应用内更新从 v1.1.1 起生效；更早版本需手动覆盖安装一次
 - 更新源配置在 `lib/services/update_checker.dart` 顶部的 `kRepoOwner` / `kRepoName`
 - 发布页同时挂三个架构的 APK；更新器按设备 `supportedAbis` 选包
