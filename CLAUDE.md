@@ -22,27 +22,28 @@ flutter build apk --release --split-per-abi --obfuscate \
 flutter build macos --release --obfuscate \
   --split-debug-info=build/symbols-macos
 
-# 3. macOS 剥掉 Intel 架构（默认 universal 双架构，体积翻倍）
-APP=build/macos/Build/Products/Release/zcode_remote_client.app
-find "$APP" -type f \( -name 'zcode_remote_client' -o -name 'App' -o -name 'FlutterMacOS' \) |
-  while read f; do
-    lipo -info "$f" 2>/dev/null | grep -q x86_64 &&
-      lipo -remove x86_64 -output /tmp/_thin "$f" && mv /tmp/_thin "$f"
-  done
-codesign --force --deep --sign - "$APP"
-# 瘦身后务必 open "$APP" 验证能启动
+# 3. macOS 分架构出包：从 universal 分别剥出 arm64 / x86_64，各打一个 DMG
+for ARCH in arm64 x86_64; do
+  DST=/tmp/macapp-$ARCH.app
+  rm -rf "$DST"; cp -R build/macos/Build/Products/Release/zcode_remote_client.app "$DST"
+  find "$DST" -type f \( -name 'zcode_remote_client' -o -name 'App' -o -name 'FlutterMacOS' \) |
+    while read f; do
+      lipo -thin $ARCH -output /tmp/_thin "$f" 2>/dev/null && mv /tmp/_thin "$f"
+    done
+  codesign --force --deep --sign - "$DST"
+  # 打 DMG（含拖拽安装的 Applications 符号链接）
+  DMGROOT=/tmp/dmgroot-$ARCH; rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
+  cp -R "$DST" "$DMGROOT/"; ln -s /Applications "$DMGROOT/Applications"
+  hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
+    -format UDZO -ov /tmp/zcode-remote-client-macos-$ARCH-vX.Y.Z.dmg
+done
+# 瘦身后务必 open /tmp/macapp-arm64.app 验证能启动
 
-# 4. 附件统一命名：zcode-remote-client-<平台>-vX.Y.Z.<ext>
+# 4. Android 分架构附件命名
 for abi in arm64-v8a armeabi-v7a x86_64; do
   cp build/app/outputs/flutter-apk/app-$abi-release.apk \
      /tmp/zcode-remote-client-android-$abi-vX.Y.Z.apk
 done
-# 打 DMG（含拖拽安装的 Applications 符号链接）
-DMGROOT=/tmp/dmgroot; rm -rf "$DMGROOT" && mkdir -p "$DMGROOT"
-cp -R build/macos/Build/Products/Release/zcode_remote_client.app "$DMGROOT/"
-ln -s /Applications "$DMGROOT/Applications"
-hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
-  -format UDZO -ov /tmp/zcode-remote-client-macos-vX.Y.Z.dmg
 
 # 5. 提交代码并推送
 git add -A && git commit -m "..." && git push origin main
@@ -52,7 +53,8 @@ gh release create vX.Y.Z \
   /tmp/zcode-remote-client-android-arm64-v8a-vX.Y.Z.apk \
   /tmp/zcode-remote-client-android-armeabi-v7a-vX.Y.Z.apk \
   /tmp/zcode-remote-client-android-x86_64-vX.Y.Z.apk \
-  /tmp/zcode-remote-client-macos-vX.Y.Z.dmg \
+  /tmp/zcode-remote-client-macos-arm64-vX.Y.Z.dmg \
+  /tmp/zcode-remote-client-macos-x86_64-vX.Y.Z.dmg \
   --title "vX.Y.Z" --notes "更新说明...\
   （注意：gh release upload 不支持 # 改名语法，必须先物理改名再上传）"
 ```
