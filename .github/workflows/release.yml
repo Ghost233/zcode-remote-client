@@ -1,20 +1,86 @@
-# 发版流水线：推 v* tag 自动出包发布；手动触发(workflow_dispatch)只构建不发布。
-# 产物与顺序和本地手动流程保持一致（arm64 APK 必须第一个上传，
-# 旧版本应用内更新器固定取第一个 .apk）。
+# 发版流水线（版本号完全由代码定义）：
+# - 推 main 且版本有更新（pubspec.yaml / RELEASE_NOTES.md 变化）→ 自动出
+#   全平台包并发布 Release，tag 由 CI 按 pubspec 版本打，不手写 tag。
+# - 手动触发(workflow_dispatch) → 只构建验证，不发布。
+# - 只允许 main 分支运行，不支持指定 commit 构建。
+#
+# 版本三要素（全部来自被编译的 commit，无人工维护项）：
+#   X.Y.Z   ← pubspec.yaml（发版时手动 +0.0.1）
+#   构建号  ← 提交数 + 1000（自动单调递增；余量保证高于旧手工 +N 方案）
+#   短哈希  ← commit SHA 前 6 位，经 --dart-define 注入 app（设置页可见）
+#             并附加到产物文件名（如 ...-v1.1.4-a1b2c3.apk），包 ↔ 源码可精确对应
 name: release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths: ['pubspec.yaml', 'RELEASE_NOTES.md']
   workflow_dispatch:
 
-env:
-  FLUTTER_VERSION: 3.44.9
+permissions:
+  contents: read
 
 jobs:
+  prepare:
+    name: 版本与发布判定
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      build-number: ${{ steps.meta.outputs.build_number }}
+      hash6: ${{ steps.meta.outputs.hash6 }}
+      run-builds: ${{ steps.meta.outputs.run_builds }}
+      do-release: ${{ steps.meta.outputs.do_release }}
+    steps:
+      - name: 只允许 main 分支（不支持指定 commit 构建）
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "本流水线只允许在 main 分支运行"
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # 提交计数需要完整历史
+
+      - name: 计算版本 / 构建号 / 短哈希 / 是否发布
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' \r')
+          VERSION=${VERSION%%+*}
+          COUNT=$(git rev-list --count HEAD)
+          BUILD_NUMBER=$((COUNT + 1000))
+          HASH6=${GITHUB_SHA::6}
+          LATEST=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ "v$VERSION" = "$LATEST" ]; then
+            DO_RELEASE=false
+          else
+            DO_RELEASE=true
+          fi
+          # push 时版本没有更新（如仅改依赖碰了 pubspec）→ 不值得跑全套构建
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$DO_RELEASE" = "false" ]; then
+            RUN_BUILDS=false
+          else
+            RUN_BUILDS=true
+          fi
+          {
+            echo "version=$VERSION"
+            echo "build_number=$BUILD_NUMBER"
+            echo "hash6=$HASH6"
+            echo "run_builds=$RUN_BUILDS"
+            echo "do_release=$DO_RELEASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "版本=$VERSION 构建号=$BUILD_NUMBER 哈希=$HASH6 最新Release=${LATEST:-无} 构建=$RUN_BUILDS 发布=$DO_RELEASE"
+
   android:
     name: Android 三架构 APK
+    needs: prepare
+    if: needs.prepare.outputs.run-builds == 'true'
     runs-on: ubuntu-latest
+    env:
+      BUILD_NAME: ${{ needs.prepare.outputs.version }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build-number }}
+      BUILD_HASH: ${{ needs.prepare.outputs.hash6 }}
     steps:
       - uses: actions/checkout@v7
 
@@ -25,7 +91,7 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: 3.44.9
           channel: stable
           cache: true
 
@@ -46,12 +112,13 @@ jobs:
           KEY_ALIAS: zcode
         run: |
           flutter build apk --release --split-per-abi --obfuscate \
-            --split-debug-info=build/symbols-android
-          V=$(grep '^version:' pubspec.yaml | sed 's/version: //;s/+.*//')
+            --split-debug-info=build/symbols-android \
+            --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER" \
+            --dart-define=BUILD_HASH="$BUILD_HASH"
           mkdir -p dist
           for abi in arm64-v8a armeabi-v7a x86_64; do
             cp "build/app/outputs/flutter-apk/app-$abi-release.apk" \
-               "dist/zcode-remote-client-android-$abi-v$V.apk"
+               "dist/zcode-remote-client-android-$abi-v$BUILD_NAME-$BUILD_HASH.apk"
           done
 
       - uses: actions/upload-artifact@v7
@@ -61,25 +128,34 @@ jobs:
 
   macos:
     name: macOS 双架构 DMG
+    needs: prepare
+    if: needs.prepare.outputs.run-builds == 'true'
     runs-on: macos-latest
+    env:
+      BUILD_NAME: ${{ needs.prepare.outputs.version }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build-number }}
+      BUILD_HASH: ${{ needs.prepare.outputs.hash6 }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: 3.44.9
           channel: stable
           cache: true
 
       - run: flutter pub get
 
-      - run: flutter build macos --release --obfuscate --split-debug-info=build/symbols-macos
+      - run: >-
+          flutter build macos --release --obfuscate
+          --split-debug-info=build/symbols-macos
+          --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+          --dart-define=BUILD_HASH="$BUILD_HASH"
 
       # Flutter 产物是 universal：分别剥出 arm64 / x86_64，重签名后各打 DMG
-      #（含拖拽安装的 Applications 符号链接，与本地手动流程一致）。
+      #（含拖拽安装的 Applications 符号链接）。
       - name: 剥架构 + 打 DMG
         run: |
-          V=$(grep '^version:' pubspec.yaml | sed 's/version: //;s/+.*//')
           mkdir -p dist
           for ARCH in arm64 x86_64; do
             DST="$RUNNER_TEMP/macapp-$ARCH.app"
@@ -95,7 +171,7 @@ jobs:
             cp -R "$DST" "$DMGROOT/"
             ln -s /Applications "$DMGROOT/Applications"
             hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
-              -format UDZO -ov "dist/zcode-remote-client-macos-$ARCH-v$V.dmg" > /dev/null
+              -format UDZO -ov "dist/zcode-remote-client-macos-$ARCH-v$BUILD_NAME-$BUILD_HASH.dmg" > /dev/null
           done
           ls -lh dist/
 
@@ -106,37 +182,46 @@ jobs:
 
   windows:
     name: Windows x64 zip
+    needs: prepare
+    if: needs.prepare.outputs.run-builds == 'true'
     runs-on: windows-latest
     defaults:
       run:
         shell: bash
+    env:
+      BUILD_NAME: ${{ needs.prepare.outputs.version }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build-number }}
+      BUILD_HASH: ${{ needs.prepare.outputs.hash6 }}
     steps:
       - uses: actions/checkout@v7
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: 3.44.9
           channel: stable
           cache: true
 
       - run: flutter pub get
 
-      - run: flutter build windows --release --obfuscate --split-debug-info=build/symbols-windows
+      - run: >-
+          flutter build windows --release --obfuscate
+          --split-debug-info=build/symbols-windows
+          --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
+          --dart-define=BUILD_HASH="$BUILD_HASH"
         env:
           # flutter_inappwebview_windows 用 <experimental/coroutine>（/await），
           # 最新 MSVC STL 把它升级成硬错误 STL1011；微软官方开关压掉，
           # 通过 CL 环境变量注入对插件子工程也生效。注意必须用 -D 而不是
-          # /D：Git-Bash 会把 /D 开头的值当 Unix 路径转换成 C:\...\D，
+          # /D：Git-Bash 会把 /D 开头的环境变量值做路径转换成 C:\...\D，
           # 传给 cl 就成了乱参数（表现为 CMake 找不到 C++ 编译器）。
           CL: -D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
 
       # 产物是 exe + dll + data 一整套，整个 Release 目录打成 zip
       - name: 打 zip
         run: |
-          V=$(grep '^version:' pubspec.yaml | sed 's/version: //;s/+.*//')
           mkdir -p dist
           cd build/windows/x64/runner/Release
-          7z a -tzip "$GITHUB_WORKSPACE/dist/zcode-remote-client-windows-x64-v$V.zip" .
+          7z a -tzip "$GITHUB_WORKSPACE/dist/zcode-remote-client-windows-x64-v$BUILD_NAME-$BUILD_HASH.zip" .
 
       - uses: actions/upload-artifact@v7
         with:
@@ -145,43 +230,54 @@ jobs:
 
   release:
     name: 发布 Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [android, macos, windows]
+    needs: [prepare, android, macos, windows]
+    if: >-
+      !cancelled() &&
+      needs.prepare.outputs.run-builds == 'true' &&
+      needs.prepare.outputs.do-release == 'true' &&
+      needs.android.result == 'success' &&
+      needs.macos.result == 'success' &&
+      needs.windows.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      HASH6: ${{ needs.prepare.outputs.hash6 }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # 取 tag 注释作发布说明
 
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
-      - name: 校验 tag 与 pubspec 版本一致（应用内更新依赖二者匹配）
+      - name: 校验发布说明（RELEASE_NOTES.md 是 Release 正文，必须随版本一起提交）
         run: |
-          V=$(grep '^version:' pubspec.yaml | sed 's/version: //;s/+.*//')
-          if [ "v$V" != "${GITHUB_REF_NAME}" ]; then
-            echo "tag ${GITHUB_REF_NAME} 与 pubspec 版本 v$V 不一致"
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "RELEASE_NOTES.md 缺失或为空：请写好发布说明后重新提交"
             exit 1
           fi
 
-      - name: 生成发布说明（取 tag 注释）
-        run: git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
-
-      - name: 创建 Release（arm64 APK 必须第一个上传）
+      - name: 创建 Release（tag 按 pubspec 版本打在本 commit 上）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          {
+            echo "由 commit $HASH6 自动构建发布。"
+            echo ""
+            cat RELEASE_NOTES.md
+          } > /tmp/notes.md
           cd dist
           ls -lh
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --notes-file /tmp/notes.md \
             zcode-remote-client-android-arm64-v8a-*.apk \
             zcode-remote-client-android-armeabi-v7a-*.apk \
             zcode-remote-client-android-x86_64-*.apk \
             zcode-remote-client-macos-arm64-*.dmg \
             zcode-remote-client-macos-x86_64-*.dmg \
-            zcode-remote-client-windows-x64-*.zip \
-            --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md
+            zcode-remote-client-windows-x64-*.zip
+          # arm64 APK 必须第一个上传（旧版本应用内更新器固定取第一个 .apk）

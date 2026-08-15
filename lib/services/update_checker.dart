@@ -8,6 +8,15 @@ import 'package:path_provider/path_provider.dart';
 const kRepoOwner = 'Ghost233';
 const kRepoName = 'zcode-remote-client';
 
+/// 构建期注入的提交短哈希（CI 用 --dart-define=BUILD_HASH 写入；
+/// 本地 flutter run 未注入时为空字符串）。
+const String kBuildHash = String.fromEnvironment('BUILD_HASH');
+
+/// 用户主动取消下载（已下载部分保留，下次断点续传）。
+class UpdateDownloadCancelled implements Exception {
+  const UpdateDownloadCancelled();
+}
+
 class ReleaseAsset {
   const ReleaseAsset({
     required this.name,
@@ -114,38 +123,138 @@ class UpdateChecker {
     return false;
   }
 
-  /// 下载匹配设备 ABI 的 APK 到临时目录，返回文件路径；失败返回 null。
+  /// 下载匹配设备 ABI 的 APK，返回文件路径；永久性失败返回 null。
+  ///
+  /// 弱网加固：
+  /// - 断点续传：部分文件存应用支持目录（不会被系统清理），HTTP Range 续传，
+  ///   If-Range 带 ETag 校验（远端文件变了自动回退全量重下，防串包）；
+  /// - 自动重试：连接失败/读超时（20s 无数据）自动断点续传重试，最多 30 次；
+  /// - 完整性：下完校验总字节数；
+  /// - [shouldCancel] 返回 true 时抛 [UpdateDownloadCancelled] 中止，
+  ///   已下载部分保留。
   static Future<String?> downloadAndroidApk(
     AppRelease release,
     void Function(int received, int total) onProgress, {
     List<String> abis = const [],
+    bool Function()? shouldCancel,
+    void Function(int attempt)? onRetry,
   }) async {
     final asset = release.androidApkFor(abis);
     if (asset == null) return null;
-    final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/${asset.name}');
-    final client = http.Client();
-    try {
-      final res = await client.send(http.Request('GET', Uri.parse(asset.url)));
-      if (res.statusCode != 200) return null;
-      final total = res.contentLength ?? asset.size;
-      var received = 0;
-      final sink = file.openWrite();
-      await for (final chunk in res.stream) {
-        sink.add(chunk);
-        received += chunk.length;
-        onProgress(received, total);
-      }
-      await sink.flush();
-      await sink.close();
-      return file.path;
-    } catch (_) {
+
+    // 应用支持目录而非临时缓存：跨次启动仍可续传。
+    final dir = await getApplicationSupportDirectory();
+    final downloadDir = Directory('${dir.path}/downloads');
+    await downloadDir.create(recursive: true);
+    final part = File('${downloadDir.path}/${asset.name}.part');
+    final target = File('${downloadDir.path}/${asset.name}');
+    final metaFile = File('${downloadDir.path}/${asset.name}.meta');
+
+    var etag = '';
+    var total = 0;
+    if (await metaFile.exists()) {
       try {
-        await file.delete();
-      } catch (_) {}
-      return null;
-    } finally {
-      client.close();
+        final m = jsonDecode(await metaFile.readAsString());
+        etag = (m as Map)['etag'] as String? ?? '';
+        total = (m['total'] as int?) ?? 0;
+      } catch (_) {
+        try {
+          await metaFile.delete();
+        } catch (_) {}
+      }
     }
+
+    const maxAttempts = 30;
+    const connectTimeout = Duration(seconds: 20);
+    const stallTimeout = Duration(seconds: 20);
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (shouldCancel != null && shouldCancel()) {
+        throw const UpdateDownloadCancelled();
+      }
+      try {
+        var start = 0;
+        if (await part.exists()) start = await part.length();
+        if (total > 0 && (start <= 0 || start > total)) {
+          // 没有可靠的续传元信息或本地比远端还大：作废重下。
+          try {
+            await part.delete();
+          } catch (_) {}
+          start = 0;
+          etag = '';
+          total = 0;
+        }
+
+        final client = http.Client();
+        try {
+          final req = http.Request('GET', Uri.parse(asset.url));
+          if (start > 0) {
+            req.headers['Range'] = 'bytes=$start-';
+            if (etag.isNotEmpty) req.headers['If-Range'] = etag;
+          }
+          final res = await client.send(req).timeout(connectTimeout);
+          if (res.statusCode != 200 && res.statusCode != 206) {
+            // 404/403 等永久性失败，重试没有意义。
+            return null;
+          }
+          final resuming = res.statusCode == 206 && start > 0;
+          if (!resuming) {
+            start = 0;
+            total = res.contentLength ?? asset.size;
+            etag = res.headers['etag'] ?? '';
+          } else {
+            total = start + (res.contentLength ?? (total - start));
+          }
+          if (total <= 0) total = asset.size;
+          await metaFile.writeAsString(
+            jsonEncode({'etag': etag, 'total': total}),
+          );
+
+          var received = start;
+          final sink = part.openWrite(
+            mode: resuming ? FileMode.append : FileMode.write,
+          );
+          try {
+            // timeout：一段时间收不到数据视为连接卡死，抛错走重试。
+            await for (final chunk in res.stream.timeout(stallTimeout)) {
+              if (shouldCancel != null && shouldCancel()) {
+                throw const UpdateDownloadCancelled();
+              }
+              sink.add(chunk);
+              received += chunk.length;
+              onProgress(received, total);
+            }
+          } finally {
+            try {
+              await sink.flush();
+            } catch (_) {}
+            await sink.close();
+          }
+
+          if (received < total) {
+            throw StateError('下载不完整($received/$total)');
+          }
+          try {
+            if (await target.exists()) await target.delete();
+          } catch (_) {}
+          await part.rename(target.path);
+          try {
+            await metaFile.delete();
+          } catch (_) {}
+          return target.path;
+        } finally {
+          client.close();
+        }
+      } on UpdateDownloadCancelled {
+        rethrow;
+      } catch (_) {
+        if (attempt >= maxAttempts) return null;
+        onRetry?.call(attempt);
+        // 退避重试，封顶 8 秒。
+        final delay = attempt < 8 ? attempt : 8;
+        await Future<void>.delayed(Duration(seconds: delay));
+      }
+    }
+    return null;
   }
 }

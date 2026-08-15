@@ -90,6 +90,8 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
   int _received = 0;
   int _total = 1;
   String? _error;
+  bool _cancelRequested = false;
+  String _retryStatus = '';
 
   @override
   void initState() {
@@ -105,17 +107,24 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
         final info = await DeviceInfoPlugin().androidInfo;
         abis = info.supportedAbis;
       } catch (_) {}
-      final path = await UpdateChecker.downloadAndroidApk(widget.release, (
-        received,
-        total,
-      ) {
-        if (mounted) {
-          setState(() {
-            _received = received;
-            _total = total > 0 ? total : 1;
-          });
-        }
-      }, abis: abis);
+      final path = await UpdateChecker.downloadAndroidApk(
+        widget.release,
+        (received, total) {
+          if (mounted) {
+            setState(() {
+              _received = received;
+              _total = total > 0 ? total : 1;
+            });
+          }
+        },
+        abis: abis,
+        shouldCancel: () => _cancelRequested,
+        onRetry: (attempt) {
+          if (mounted) {
+            setState(() => _retryStatus = '网络中断，断点续传中（第 $attempt 次）…');
+          }
+        },
+      );
       if (path == null) throw StateError('下载失败');
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -127,6 +136,9 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
           mode: LaunchMode.externalApplication,
         );
       }
+    } on UpdateDownloadCancelled {
+      // 用户取消：静默退出，已下载部分保留供下次续传。
+      if (mounted) Navigator.of(context).pop();
     } catch (_) {
       if (mounted) setState(() => _error = '下载失败，可到发布页手动下载');
     }
@@ -148,6 +160,16 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
                   '${(_total / 1048576).toStringAsFixed(1)} MB',
                   style: const TextStyle(fontSize: 12),
                 ),
+                if (_retryStatus.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _cancelRequested ? '正在取消…' : _retryStatus,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).hintColor,
+                    ),
+                  ),
+                ],
               ],
             )
           : Text(_error!),
@@ -156,6 +178,11 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('知道了'),
+          )
+        else if (!_cancelRequested)
+          TextButton(
+            onPressed: () => setState(() => _cancelRequested = true),
+            child: const Text('取消'),
           ),
       ],
     );

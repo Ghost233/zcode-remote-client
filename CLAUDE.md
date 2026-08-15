@@ -4,32 +4,41 @@ ZCode 远程终端跨平台客户端（iOS / Android / macOS / Windows），内�
 
 ## 版本号规则（重要）
 
-- **每次发版，版本号在上一次的基础上 +0.0.1**（patch 位递增），build number 同步 +1
-- 例：`1.1.1+3` → 下一次发版为 `1.1.2+4`，再下一次 `1.1.3+5`
-- 版本号写在 `pubspec.yaml` 的 `version:` 字段
-- **Git tag 必须与 pubspec 版本一致**（带 `v` 前缀），如 `version: 1.1.1+3` 对应 tag `v1.1.1`——应用内更新依赖 tag 与 pubspec 匹配来比较版本
+- **版本号唯一来源是 `pubspec.yaml` 的 `version:`，只写 `X.Y.Z`，不写 build 号**
+  （例：`1.1.4`）；每次发版在上一次基础上 +0.0.1（patch 递增）
+- **build 号不手写**：CI 构建时用 `--build-number` 注入（提交数 + 1000，
+  自动单调递增；+1000 余量保证永远高于旧手工方案的最大 +5）
+- **提交短哈希（前 6 位）**：CI 用 `--dart-define=BUILD_HASH` 注入 app
+  （设置页「当前版本」可见），并附加到产物文件名
+  （如 `...-v1.1.4-a1b2c3.apk`），装了哪个包能精确对应到源码 commit
+- **Release tag（`vX.Y.Z`）由 CI 按 pubspec 版本自动打**，不再手写 tag，
+  也因此天然不会出现 tag 与版本不一致的问题；应用内更新比较的仍是
+  tag 与 app 内置版本
 
-## 发版流程（GitHub Actions 自动出包，public 仓库免费）
+## 发版流程（GitHub Actions 全自动，public 仓库免费）
 
-流水线在 `.github/workflows/release.yml`。日常发版只需升版本 + 推 tag：
+流水线在 `.github/workflows/release.yml`。**只允许 main 分支触发，
+不支持指定 commit 构建。** 日常发版只需两改一推：
 
 ```bash
-# 1. 升版本号（+0.0.1 / build +1）：编辑 pubspec.yaml，如 1.1.3+5 → 1.1.4+6
-# 2. 提交并推送
-git add pubspec.yaml && git commit -m "chore: 发布 v1.1.4" && git push origin main
-# 3. 打带注释的 tag（注释会成为 Release 发布说明，支持多行），推送触发自动出包
-git tag -a v1.1.4 -m "更新说明标题
-
-- 修复 ...
-- 新增 ..."
-git push origin v1.1.4
+# 1. pubspec.yaml 版本 +0.0.1
+# 2. RELEASE_NOTES.md 写成这次的发布说明（它就是 Release 正文）
+# 3. 提交推送到 main：
+git add pubspec.yaml RELEASE_NOTES.md
+git commit -m "chore: 发布 v1.1.4"
+git push origin main
 ```
 
-Actions 自动完成：Android 三架构分包 + 混淆（正式签名）、macOS universal 剥
-arm64 / x86_64 各打 DMG、Windows x64 zip、校验 tag 与 pubspec 版本一致
-（不一致直接失败）、创建 Release 并按固定顺序上传附件（**arm64 APK 第一个**，
-旧版本更新器固定取第一个 .apk）。在 Actions 页面可手动触发
-（workflow_dispatch）做只构建不发布的验证跑。
+推送到 main 后 CI 自动：构建 Android 三架构 / macOS 双架构 / Windows x64
+（版本、构建号、短哈希全部来自被编译的 commit）→ 在该 commit 上打
+tag `vX.Y.Z` → 创建 Release（说明取 RELEASE_NOTES.md + 附带构建哈希行，
+附件顺序 **arm64 APK 第一个**，兼容旧版本应用内更新器）。
+
+- **手动触发（workflow_dispatch）= 只构建验证，不发布**（也只跑 main）
+- pubspec 版本与最新 Release tag 相同时，push 触发的运行会自动跳过构建
+  （改依赖等触碰 pubspec 的提交不会白白跑 20 分钟）
+- RELEASE_NOTES.md 缺失或为空 → 发布直接失败（强制写说明）
+- 应用内更新下载（Android）支持断点续传 + 自动重试，弱网可靠
 
 ## 注意事项
 

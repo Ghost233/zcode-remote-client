@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
+import '../services/update_checker.dart';
 import '../widgets/device_edit_sheet.dart';
 import '../widgets/update_dialog.dart';
 
@@ -142,11 +143,14 @@ class SettingsPage extends StatelessWidget {
               title: const Text('当前版本'),
               subtitle: FutureBuilder<PackageInfo>(
                 future: PackageInfo.fromPlatform(),
-                builder: (context, snap) => Text(
-                  snap.hasData
-                      ? 'v${snap.data!.version} (${snap.data!.buildNumber})'
-                      : '…',
-                ),
+                builder: (context, snap) {
+                  if (!snap.hasData) return const Text('…');
+                  final info = snap.data!;
+                  // 构建短哈希由 CI 注入（--dart-define=BUILD_HASH），
+                  // 本地 flutter run 时为空。
+                  final hash = kBuildHash.isEmpty ? '' : ' · $kBuildHash';
+                  return Text('v${info.version} · 构建 ${info.buildNumber}$hash');
+                },
               ),
               trailing: OutlinedButton.icon(
                 onPressed: () => checkForUpdates(context, manual: true),
