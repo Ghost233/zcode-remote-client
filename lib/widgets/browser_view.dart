@@ -56,6 +56,44 @@ const String kDesktopViewportScript = '''
 })();
 ''';
 
+/// 输入法组合态回车保护。
+///
+/// 中文等输入法组词过程中按回车：Chromium（Edge/Chrome）给页面的
+/// keydown 是 keyCode=229 且会消费掉提交组合的那次回车，页面收不到；
+/// 而 WKWebView（本 app 的 macOS/iOS 内核）会派发 keyCode=13 的正常
+/// 回车，页面按 Chromium 惯例写的防御（只认 229）就失效了——组词途中
+/// 一按回车整句被"发送"出去。
+///
+/// 处理：文档开始即在 window 捕获阶段拦截组合态的 Enter（keydown/
+/// keypress/keyup），不让页面监听器收到；不 preventDefault——组合的
+/// 提交由输入法在原生层完成（macOS 拼音：回车落选上屏原始字母），
+/// 行为与 Edge 对齐。候选窗内按回车选词不会到达页面，不受影响。
+const String kImeEnterGuardScript = '''
+(function() {
+  if (window.__zcodeImeGuard) return;
+  window.__zcodeImeGuard = true;
+  var composing = false;
+  window.addEventListener('compositionstart', function() {
+    composing = true;
+  }, true);
+  window.addEventListener('compositionend', function() {
+    // compositionend 与触发它的 keydown 的先后顺序各引擎不同，
+    // 延一拍再放行，保证"提交组合的那次回车"仍被拦截。
+    setTimeout(function() { composing = false; }, 0);
+  }, true);
+  function guard(e) {
+    if (e.key !== 'Enter' && e.keyCode !== 13) return;
+    if (e.isComposing || composing) {
+      e.stopImmediatePropagation();
+      e.stopPropagation();
+    }
+  }
+  window.addEventListener('keydown', guard, true);
+  window.addEventListener('keypress', guard, true);
+  window.addEventListener('keyup', guard, true);
+})();
+''';
+
 /// 单个设备对应的完整功能浏览器视图。
 ///
 /// 覆盖能力：前进/后退/刷新、加载进度、JS 弹窗（alert/confirm/prompt）、
@@ -473,14 +511,19 @@ class BrowserViewState extends State<BrowserView>
                 ? UserPreferredContentMode.DESKTOP
                 : UserPreferredContentMode.RECOMMENDED,
           ),
-          initialUserScripts: desktopMode
-              ? UnmodifiableListView([
-                  UserScript(
-                    source: kDesktopViewportScript,
-                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-                  ),
-                ])
-              : null,
+          // 常驻：输入法组合态回车保护（修中文输入法组词途中回车误发送）；
+          // 桌面模式追加视口脚本。
+          initialUserScripts: UnmodifiableListView([
+            UserScript(
+              source: kImeEnterGuardScript,
+              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+            ),
+            if (desktopMode)
+              UserScript(
+                source: kDesktopViewportScript,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              ),
+          ]),
           pullToRefreshController: _pullToRefresh,
           contextMenu: ContextMenu(
             settings: ContextMenuSettings(
