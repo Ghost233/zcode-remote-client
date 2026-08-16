@@ -112,20 +112,6 @@ class _FloatingDockState extends State<FloatingDock> {
     ).clamp(_minZoom, _maxZoom);
   }
 
-  /// Android 双指缩放不经过应用内的缩放通知器，展开工具栏时把原生
-  /// 实际倍率读回来，百分比显示才与画面一致（写回通知器会触发一次
-  /// 页面缩放应用，倍率相等时是空操作，不会抖动画面）。
-  Future<void> _syncZoomFromNative() async {
-    if (!Platform.isAndroid) return;
-    final c = widget.controller;
-    if (c == null) return;
-    final scale = await c.getZoomScale();
-    if (!mounted || scale == null) return;
-    if ((widget.pageZoom.value - scale).abs() > 0.005) {
-      widget.pageZoom.value = double.parse(scale.toStringAsFixed(2));
-    }
-  }
-
   /// 「更多」面板：网页操作 + 偏好开关 + 应用入口（设置/检查更新）
   /// 集中在一个地方，和专职的「切换设备」按钮不再混淆。
   void _showActions() {
@@ -365,7 +351,6 @@ class _FloatingDockState extends State<FloatingDock> {
       onTap: () {
         _wake();
         setState(() => _expanded = true);
-        _syncZoomFromNative();
       },
       onPanStart: (_) => _wake(),
       onPanUpdate: _onDragUpdate,
@@ -439,10 +424,11 @@ class _FloatingDockState extends State<FloatingDock> {
               ),
             _buildPanToggle(),
             const _Divider(),
-            // 页面缩放：浏览器 Ctrl +/- 式整页缩放（布局重排）。
-            // macOS/iOS 走 WKWebView 原生 pageZoom，Windows 走根节点
-            // CSS zoom，Android 直接驱动 WebView 原生缩放（与双指缩放
-            // 同一份）；点百分比回到 100% 时会把双指缩放一并复位。
+            // 页面缩放：浏览器 Ctrl +/- 式缩放（布局重排）。macOS/iOS
+            // 走 WKWebView 原生 pageZoom，Windows 走根节点 CSS zoom，
+            // Android 是系统级字体缩放 textZoom（字体放大、按新字号
+            // 重排，fixed 输入框不跑位）。点百分比回到 100% 时会把
+            // Android 双指缩放也一并复位。
             _zoomGroup(
               notifier: widget.pageZoom,
               step: 0.25,
@@ -536,8 +522,8 @@ class _FloatingDockState extends State<FloatingDock> {
               borderRadius: BorderRadius.circular(8),
               onTap: () async {
                 _setZoom(notifier, 1.0, step);
-                // 双指缩放不经过通知器：通知器已是 1.0 时监听器不触发，
-                // 原生缩放要显式复位兜底（resetNativeZoom 仅 Android 生效）。
+                // 双指缩放与页面缩放互相独立，复位要显式带上
+                // （resetNativeZoom 仅 Android 生效）。
                 await resetNativeZoom(widget.controller);
               },
               child: Padding(

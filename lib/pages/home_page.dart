@@ -83,9 +83,8 @@ class _HomePageState extends State<HomePage> {
     final switching = store.currentId != device.id;
     _open(device.id);
     if (switching) {
-      // 需求：切到另一个会话时，缩放和平移重置为默认。双指缩放不经过
-      // 通知器（通知器已是 1.0 时监听器不会触发），Android 原生缩放
-      // 要显式复位兜底。
+      // 需求：切到另一个会话时，缩放和平移重置为默认。Android 双指缩放
+      // 与页面缩放互相独立，要显式复位。
       _pageZooms[device.id]?.value = 1.0;
       await resetNativeZoom(_controllers[device.id]);
       final view = _viewKeys[device.id]?.currentState;
