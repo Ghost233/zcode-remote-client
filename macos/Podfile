@@ -44,4 +44,24 @@ post_install do |installer|
   require File.expand_path(
     'Flutter/ephemeral/.symlinks/plugins/webview_cef/macos/embed_cef_helpers.rb', __dir__)
   WebviewCEF.install_helper_phase(installer)
+
+  # webview_cef 的 pod 源码编译必须与所链接的 CEF 二进制同风味：Release/
+  # Profile 用 Release 版 CEF（不导出 DCHECK 分支符号，见
+  # cef_ref_counted.h 的 ~RefCountedThreadSafeBase），需要 NDEBUG 关闭
+  # DCHECK_IS_ON()，否则符号未定义、链接失败。生成的 Pods 工程默认不带
+  # NDEBUG，这里按构建配置补上（不要写进 podspec 的 xcconfig——带空格的
+  # 框架路径会被 CocoaPods 的 xcconfig 序列化弄坏）。
+  installer.pods_project.targets
+      .select { |t| t.name == 'webview_cef' }
+      .each do |t|
+    t.build_configurations.each do |c|
+      next unless %w[Release Profile].include?(c.name)
+      defs = c.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+      defs = [defs] if defs.is_a?(String)
+      unless defs.include?('NDEBUG=1')
+        defs << 'NDEBUG=1'
+        c.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
+      end
+    end
+  end
 end

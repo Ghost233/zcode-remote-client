@@ -48,13 +48,6 @@ Flutter webview backed by CEF (Chromium Embedded Framework)
     'DEFINES_MODULE' => 'YES',
     'CLANG_CXX_LANGUAGE_STANDARD' => 'c++20',
     "EXCLUDED_ARCHS[sdk=macosx*]" => non_host_arch,
-    # 本仓库补丁：pod 源码（cef_bridge.cc 等）编译时必须与所用 CEF 二进制
-    # 的 DCHECK 配置一致——Release/Profile 构建链接 Release CEF（不导出
-    # DCHECK 分支符号，见 cef_ref_counted.h），必须定义 NDEBUG 关闭
-    # DCHECK_IS_ON()，否则 ~RefCountedThreadSafeBase 等符号未定义。
-    # 生成的 Pods 工程默认不带 NDEBUG，显式补上。
-    'GCC_PREPROCESSOR_DEFINITIONS[config=Release]' => '$(inherited) NDEBUG=1',
-    'GCC_PREPROCESSOR_DEFINITIONS[config=Profile]' => '$(inherited) NDEBUG=1',
     # Zero-copy GPU rendering: CEF delivers frames as a shared-texture IOSurface
     # via OnAcceleratedPaint instead of a software CPU buffer (OnPaint). The IME
     # and frame plumbing key off this define in the shared common/ sources.
