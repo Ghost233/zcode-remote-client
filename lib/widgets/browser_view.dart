@@ -10,7 +10,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
+import 'browser_session.dart';
 import 'glass.dart';
+import 'web_scripts.dart';
 
 /// 桌面模式使用的桌面版 Chrome UA（Windows）。
 const kDesktopUserAgent =
@@ -107,7 +109,8 @@ class BrowserView extends StatefulWidget {
 }
 
 class BrowserViewState extends State<BrowserView>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin
+    implements BrowserSession {
   InAppWebViewController? _controller;
   PullToRefreshController? _pullToRefresh;
   InAppWebViewHitTestResult? _lastHitTest;
@@ -115,10 +118,12 @@ class BrowserViewState extends State<BrowserView>
   WebResourceError? _mainFrameError;
 
   /// 平移（抓手）模式开关，工具栏读取/切换。
+  @override
   final ValueNotifier<bool> panMode = ValueNotifier(false);
 
   /// 双指缩放开关（Android 触屏双指；macOS 触摸板捏合已否决——WKWebView
   /// 只有整页缩放，没有字体缩放，按钮置灰）。默认关，持久化。
+  @override
   final ValueNotifier<bool> pinchZoom = ValueNotifier(false);
 
   @override
@@ -158,6 +163,7 @@ class BrowserViewState extends State<BrowserView>
   /// 用于放大后把视野挪到关注的位置。桌面用鼠标拖，移动端用单指拖。
   /// 开启期间停用下拉刷新——它是 WebView 容器自己的滚动行为，
   /// 会和拖拽层抢手势（顶部下拉时触发刷新而不是平移）。
+  @override
   Future<void> setPanMode(bool enabled) async {
     panMode.value = enabled;
     await _pullToRefresh?.setEnabled(!enabled);
@@ -166,13 +172,12 @@ class BrowserViewState extends State<BrowserView>
     if (enabled) {
       await _injectPanLayer(c);
     } else {
-      await c.evaluateJavascript(
-        source: 'window.__zcodePanCleanup && window.__zcodePanCleanup();',
-      );
+      await c.evaluateJavascript(source: kPanCleanupScript);
     }
   }
 
   /// 开关双指缩放（仅 Android：触屏双指），持久化选择。
+  @override
   Future<void> setPinchZoom(bool enabled) async {
     pinchZoom.value = enabled;
     context.read<DeviceStore>().setPinchZoomEnabled(enabled);
@@ -197,50 +202,7 @@ class BrowserViewState extends State<BrowserView>
   }
 
   Future<void> _injectPanLayer(InAppWebViewController c) {
-    return c.evaluateJavascript(
-      source: '''
-(function() {
-  try {
-    window.__zcodePanCleanup && window.__zcodePanCleanup();
-    var el = document.createElement('div');
-    el.id = '__zcode_pan_layer';
-    // 覆盖层不能只有一屏大：原生缩放（Android 双指/按钮同一机制）放大
-    // 后可平移区域远超一屏，固定层若只有 100vw/vh，屏外区域的
-    // 触摸会漏给页面自身滚动，拖动就被 WebView 自己的滚动抢走。
-    // touch-action:none + preventDefault 让拖拽层独占手势（代价是
-    // 平移期间原生双指缩放也不可用，关掉平移即恢复）。
-    el.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;'
-      + 'cursor:grab;touch-action:none;overscroll-behavior:contain;';
-    var dragging = false, sx = 0, sy = 0;
-    function cover() {
-      var d = document.documentElement;
-      el.style.width = Math.max(window.innerWidth, d.scrollWidth) + 'px';
-      el.style.height = Math.max(window.innerHeight, d.scrollHeight) + 'px';
-    }
-    function down(x, y) { dragging = true; sx = x; sy = y; el.style.cursor = 'grabbing'; cover(); }
-    function move(x, y) {
-      if (!dragging) return;
-      window.scrollBy(sx - x, sy - y);
-      sx = x; sy = y;
-    }
-    function up() { dragging = false; el.style.cursor = 'grab'; }
-    el.addEventListener('mousedown', function(e) { down(e.clientX, e.clientY); e.preventDefault(); });
-    window.addEventListener('mousemove', function(e) { move(e.clientX, e.clientY); });
-    window.addEventListener('mouseup', up);
-    el.addEventListener('touchstart', function(e) {
-      var t = e.touches[0]; down(t.clientX, t.clientY); e.preventDefault();
-    }, { passive: false });
-    el.addEventListener('touchmove', function(e) {
-      var t = e.touches[0]; move(t.clientX, t.clientY); e.preventDefault();
-    }, { passive: false });
-    el.addEventListener('touchend', up);
-    cover();
-    document.documentElement.appendChild(el);
-    window.__zcodePanCleanup = function() { el.remove(); window.__zcodePanCleanup = null; };
-  } catch (e) {}
-})();
-''',
-    );
+    return c.evaluateJavascript(source: kPanLayerScript);
   }
 
   /// 页面缩放（布局重排，等效浏览器 Ctrl +/-）。
@@ -273,19 +235,27 @@ class BrowserViewState extends State<BrowserView>
         await c.setSettings(settings: settings);
       }
     } else {
-      await c.evaluateJavascript(
-        source: '''
-(function() {
-  try {
-    document.documentElement.style.zoom = '$z';
-    if (document.body) document.body.style.zoom = '';
-  } catch (e) {}
-})();
-''',
-      );
+      await c.evaluateJavascript(source: kPageZoomScript(z));
     }
   }
 
+  // ---------- 会话接口：导航 ----------
+
+  @override
+  Future<bool> canGoBack() async =>
+      await _controller?.canGoBack() ?? false;
+
+  @override
+  Future<void> goBack() => _controller?.goBack() ?? Future.value();
+
+  @override
+  Future<bool> canGoForward() async =>
+      await _controller?.canGoForward() ?? false;
+
+  @override
+  Future<void> goForward() => _controller?.goForward() ?? Future.value();
+
+  @override
   Future<void> reload() async {
     setState(() => _mainFrameError = null);
     await _controller?.loadUrl(
@@ -295,9 +265,11 @@ class BrowserViewState extends State<BrowserView>
 
   // ---------- 页面操作（供工具栏调用） ----------
 
+  @override
   Future<String?> currentUrl() async =>
       (await _controller?.getUrl())?.toString();
 
+  @override
   Future<void> copyPageLink() async {
     final url = await currentUrl();
     if (url != null) {
@@ -306,6 +278,7 @@ class BrowserViewState extends State<BrowserView>
     }
   }
 
+  @override
   Future<void> sharePage() async {
     final url = await currentUrl();
     if (url != null) {
@@ -313,6 +286,7 @@ class BrowserViewState extends State<BrowserView>
     }
   }
 
+  @override
   Future<void> copyAllText() async {
     final text = await _controller?.evaluateJavascript(
       source: '''
@@ -331,6 +305,7 @@ class BrowserViewState extends State<BrowserView>
     }
   }
 
+  @override
   Future<void> openExternal() async {
     final url = await currentUrl();
     if (url != null) {

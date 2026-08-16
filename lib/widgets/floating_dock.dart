@@ -6,6 +6,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:provider/provider.dart';
 
 import '../services/device_store.dart';
+import 'browser_session.dart';
 import 'browser_view.dart';
 import 'glass.dart';
 import 'update_dialog.dart';
@@ -34,8 +35,9 @@ class FloatingDock extends StatefulWidget {
   /// 当前页的 WebView 控制器（无打开会话时为 null）。
   final InAppWebViewController? controller;
 
-  /// 当前 BrowserView 的 key，用于调用复制/分享等页面操作。
-  final GlobalKey<BrowserViewState>? viewKey;
+  /// 当前浏览器会话视图的 key（BrowserView 或 macOS 的 CefBrowserView），
+  /// currentState 实现 BrowserSession 接口，供导航/页面操作调用。
+  final GlobalKey? viewKey;
 
   /// 页面缩放（浏览器 Ctrl +/- 式整页缩放，布局重排）。
   final ValueNotifier<double> pageZoom;
@@ -115,7 +117,7 @@ class _FloatingDockState extends State<FloatingDock> {
   /// 「更多」面板：网页操作 + 偏好开关 + 应用入口（设置/检查更新）
   /// 集中在一个地方，和专职的「切换设备」按钮不再混淆。
   void _showActions() {
-    final view = widget.viewKey?.currentState;
+    final BrowserSession? view = sessionOf(widget.viewKey);
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -191,7 +193,9 @@ class _FloatingDockState extends State<FloatingDock> {
                   item(Icons.edit_note, '替换此设备地址', widget.onReplaceAddress),
                   const Divider(height: 6, indent: 16, endIndent: 16),
                   sectionLabel('偏好'),
-                  // 桌面版网站：切换 UA，重建当前会话生效。
+                  // 桌面版网站：切换 UA，重建当前会话生效。macOS 的 CEF
+                  // 本就是桌面 Chromium（天然桌面布局），不需要该开关。
+                  if (!Platform.isMacOS)
                   Consumer<DeviceStore>(
                     builder: (ctx, store, _) => SwitchListTile(
                       contentPadding: const EdgeInsets.symmetric(
@@ -375,7 +379,7 @@ class _FloatingDockState extends State<FloatingDock> {
   /// 展开态：顶部拖拽把手 + 完整工具栏。
   /// 限高 + 滚动：矮屏（横屏手机）下按钮再多也不能溢出。
   Widget _buildExpanded() {
-    final controller = widget.controller;
+    final session = sessionOf(widget.viewKey);
     return ConstrainedBox(
       constraints: BoxConstraints(
         maxHeight: _containerH > 0 ? _containerH : double.infinity,
@@ -394,38 +398,36 @@ class _FloatingDockState extends State<FloatingDock> {
             GlassIconButton(
               icon: Icons.arrow_back_ios_new,
               tooltip: '后退',
-              onPressed: controller == null
+              onPressed: session == null
                   ? null
                   : () async {
-                      if (await controller.canGoBack()) controller.goBack();
+                      if (await session.canGoBack()) session.goBack();
                     },
             ),
             GlassIconButton(
               icon: Icons.arrow_forward_ios,
               tooltip: '前进',
-              onPressed: controller == null
+              onPressed: session == null
                   ? null
                   : () async {
-                      if (await controller.canGoForward()) {
-                        controller.goForward();
+                      if (await session.canGoForward()) {
+                        session.goForward();
                       }
                     },
             ),
             GlassIconButton(
               icon: Icons.refresh,
               tooltip: '刷新',
-              onPressed: controller == null ? null : () => controller.reload(),
+              onPressed: session == null ? null : () => session.reload(),
             ),
-            // macOS 止损入口：内嵌 WKWebView 的中文输入会话问题（发送后
-            // 打不进字）修不动时，一键交给系统浏览器。提升为一等按钮而
-            // 不藏在「更多」里——macOS 上这是常用逃生通道。
+            // macOS 逃生口：内嵌页输入异常时一键交给系统浏览器。
             if (Platform.isMacOS)
               GlassIconButton(
                 icon: Icons.open_in_browser,
-                tooltip: '在系统浏览器打开（内嵌页输入异常时用）',
-                onPressed: controller == null
+                tooltip: '在系统浏览器打开（内嵌页异常时备用）',
+                onPressed: session == null
                     ? null
-                    : () => widget.viewKey?.currentState?.openExternal(),
+                    : () => session.openExternal(),
               ),
             _buildPanToggle(),
             // 双指缩放开关：Android 可用（默认关），macOS 置灰（只有
@@ -478,7 +480,7 @@ class _FloatingDockState extends State<FloatingDock> {
 
   /// 平移（抓手）开关：开启后按住页面拖动来移动视野，再点关闭。
   Widget _buildPanToggle() {
-    final view = widget.viewKey?.currentState;
+    final BrowserSession? view = sessionOf(widget.viewKey);
     if (view == null) {
       return const GlassIconButton(
         icon: Icons.back_hand_outlined,
@@ -517,7 +519,7 @@ class _FloatingDockState extends State<FloatingDock> {
         onPressed: null,
       );
     }
-    final view = widget.viewKey?.currentState;
+    final view = sessionOf(widget.viewKey);
     if (view == null) {
       return const GlassIconButton(
         icon: Icons.pinch,

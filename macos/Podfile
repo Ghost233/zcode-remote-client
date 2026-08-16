@@ -1,4 +1,4 @@
-platform :osx, '10.15'
+platform :osx, '12.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -19,7 +19,7 @@ def flutter_root
     matches = line.match(/FLUTTER_ROOT\=(.*)/)
     return matches[1].strip if matches
   end
-  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Flutter-Generated.xcconfig, then run \"flutter pub get\""
+  raise "FLUTTER_ROOT not found in #{Flutter-Generated.xcconfig}. Try deleting Flutter-Generated.xcconfig, then run \"flutter pub get\""
 end
 
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
@@ -39,4 +39,9 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_macos_build_settings(target)
   end
+  # webview_cef（macOS 的 CEF/Chromium WebView）：嵌入 CEF helper 子进程
+  # app（多进程渲染）。不加则退回 Chromium 不支持的单进程模式。
+  require File.expand_path(
+    'Flutter/ephemeral/.symlinks/plugins/webview_cef/macos/embed_cef_helpers.rb', __dir__)
+  WebviewCEF.install_helper_phase(installer)
 end

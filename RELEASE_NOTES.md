@@ -1,3 +1,9 @@
+## v1.2.9
+
+- **macOS 内核更换：网页承载从内嵌 WKWebView 换成 CEF（Chromium）**，根治中文输入法问题——此前 Flutter 平台视图层会破坏 WKWebView 的输入法组合态（Safari/Chrome 正常、仅本应用坏），CEF 自带原生输入法管线且不经过平台视图的键盘路由。macOS 包体积从 13MB 增至约 120MB（Chromium 内核固有成本），且仅支持 Apple Silicon（arm64）与 macOS 12.0+（CEF 上游暂无 Intel/universal 构建）；Android/iOS/Windows 完全不受影响（Android 系统 WebView、Windows WebView2 本就是 Chromium）
+- macOS 已知取舍：JS 弹窗/右键菜单为 Chromium 默认行为；页面加载进度条改为流动动画（CEF 无进度事件）；「桌面版网站」开关在 macOS 隐藏（CEF 本就是桌面 Chromium）
+- 其他平台的缩放/平移/双指开关行为不变
+
 ## v1.2.8
 
 - 下载进度条重做三态显示：连接服务器期间显示「正在连接…」（此前显示假的 0.0/0.0 MB 卡着不动）；字节下载完到文件拼好之间显示「下载完成，正在校验与拼装…」加满格进度条（此前切成不定态来回扫的动画，看起来像进度条又跑了一遍）

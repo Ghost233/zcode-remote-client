@@ -136,7 +136,7 @@ jobs:
           path: dist/
 
   macos:
-    name: macOS 双架构 DMG
+    name: macOS DMG（arm64）
     needs: prepare
     if: needs.prepare.outputs.run-builds == 'true'
     # 钉住 macos-26 镜像 + Xcode 26.3：flutter_inappwebview_macos 1.2.0-beta.3
@@ -150,6 +150,9 @@ jobs:
       BUILD_NAME: ${{ needs.prepare.outputs.version }}
       BUILD_NUMBER: ${{ needs.prepare.outputs.build-number }}
       BUILD_HASH: ${{ needs.prepare.outputs.hash6 }}
+      # webview_cef 的 wrapper 默认编 Debug；release 应用必须配 Release 版
+      # wrapper（DCHECK 改 ABI），flutter build 内部的 pod install 读此变量。
+      CEF_WRAPPER_BUILD_TYPE: Release
     steps:
       - uses: actions/checkout@v7
 
@@ -159,6 +162,10 @@ jobs:
           channel: stable
           cache: true
 
+      # webview_cef：pod install 的 prepare_command 用 cmake/ninja 编译 CEF
+      # wrapper，首次还会下载约 330MB 的 CEF 标准发行版（构建时间增加）。
+      - run: brew install cmake ninja
+
       - run: flutter pub get
 
       - run: >-
@@ -167,28 +174,20 @@ jobs:
           --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
           --dart-define=BUILD_HASH="$BUILD_HASH"
 
-      # Flutter 产物是 universal：分别剥出 arm64 / x86_64，重签名后各打 DMG
-      #（含拖拽安装的 Applications 符号链接）。
-      - name: 剥架构 + 打 DMG
+      # CEF 只提供本机架构（CI 是 arm64）二进制，podspec 已剔除 x86_64
+      # 切片，产物即 arm64 单架构——不再像从前那样 universal 构建再剥双
+      # 架构。Intel Mac 待上游 universal 支持（webview_cef#30）后恢复。
+      - name: 打 DMG（arm64 单架构）
         run: |
           mkdir -p dist
-          for ARCH in arm64 x86_64; do
-            # 临时副本必须保持最终应用名：DMG 里看到的就是这个文件名。
-            rm -rf "$RUNNER_TEMP/app-$ARCH"; mkdir -p "$RUNNER_TEMP/app-$ARCH"
-            DST="$RUNNER_TEMP/app-$ARCH/ZCode远程客户端.app"
-            cp -R build/macos/Build/Products/Release/ZCode远程客户端.app "$DST"
-            find "$DST" -type f \( -name 'ZCode远程客户端' -o -name 'App' -o -name 'FlutterMacOS' \) |
-              while read f; do
-                lipo -thin $ARCH -output /tmp/_thin "$f" 2>/dev/null && mv /tmp/_thin "$f"
-              done
-            codesign --force --deep --sign - "$DST"
-            DMGROOT="$RUNNER_TEMP/dmgroot-$ARCH"
-            rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
-            cp -R "$DST" "$DMGROOT/"
-            ln -s /Applications "$DMGROOT/Applications"
-            hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
-              -format UDZO -ov "dist/zcode-remote-client-macos-$ARCH-v$BUILD_NAME-$BUILD_HASH.dmg" > /dev/null
-          done
+          APP="build/macos/Build/Products/Release/ZCode远程客户端.app"
+          codesign --force --deep --sign - "$APP"
+          DMGROOT="$RUNNER_TEMP/dmgroot"
+          rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
+          cp -R "$APP" "$DMGROOT/"
+          ln -s /Applications "$DMGROOT/Applications"
+          hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
+            -format UDZO -ov "dist/zcode-remote-client-macos-arm64-v$BUILD_NAME-$BUILD_HASH.dmg" > /dev/null
           ls -lh dist/
 
       - uses: actions/upload-artifact@v7

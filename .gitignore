@@ -120,3 +120,7 @@ app.*.symbols
 # IDE
 .idea/
 *.iml
+
+# webview_cef 构建时下载的 CEF 二进制（约几百 MB，CI/本地 pod install 自动拉取）
+packages/webview_cef/macos/third/cef/
+packages/webview_cef/macos/CefDownloads/

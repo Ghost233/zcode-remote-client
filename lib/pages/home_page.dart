@@ -7,7 +7,9 @@ import 'package:provider/provider.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
+import '../widgets/browser_session.dart';
 import '../widgets/browser_view.dart';
+import '../widgets/cef_browser_view.dart';
 import '../widgets/device_edit_sheet.dart';
 import '../widgets/device_switcher_sheet.dart';
 import '../widgets/floating_dock.dart';
@@ -32,7 +34,7 @@ class _HomePageState extends State<HomePage> {
   final List<String> _openIds = [];
   final Map<String, InAppWebViewController> _controllers = {};
   final Map<String, ValueNotifier<double>> _pageZooms = {};
-  final Map<String, GlobalKey<BrowserViewState>> _viewKeys = {};
+  final Map<String, GlobalKey> _viewKeys = {};
 
   /// 是否已做过启动自动恢复（只恢复一次，之后由用户操作驱动）。
   bool _autoOpened = false;
@@ -64,7 +66,7 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _openIds.add(id);
         _pageZooms[id] = ValueNotifier(initialPageZoom ?? 1.0);
-        _viewKeys[id] = GlobalKey<BrowserViewState>();
+        _viewKeys[id] = GlobalKey();
       });
       // 缩放变化时持久化，刷新/重启后可复用。
       _pageZooms[id]!.addListener(_persistZooms);
@@ -87,8 +89,10 @@ class _HomePageState extends State<HomePage> {
       // 与页面缩放互相独立，要显式复位。
       _pageZooms[device.id]?.value = 1.0;
       await resetNativeZoom(_controllers[device.id]);
-      final view = _viewKeys[device.id]?.currentState;
-      if (view != null && view.panMode.value) view.setPanMode(false);
+      final session = sessionOf(_viewKeys[device.id]);
+      if (session != null && session.panMode.value) {
+        session.setPanMode(false);
+      }
     }
     await store.select(device.id);
   }
@@ -107,8 +111,10 @@ class _HomePageState extends State<HomePage> {
       final nextId = _openIds.last;
       _pageZooms[nextId]?.value = 1.0;
       resetNativeZoom(_controllers[nextId]);
-      final view = _viewKeys[nextId]?.currentState;
-      if (view != null && view.panMode.value) view.setPanMode(false);
+      final session = sessionOf(_viewKeys[nextId]);
+      if (session != null && session.panMode.value) {
+        session.setPanMode(false);
+      }
       store.select(nextId);
     }
   }
@@ -137,7 +143,7 @@ class _HomePageState extends State<HomePage> {
     if (id == null || !_openIds.contains(id)) return;
     setState(() {
       _controllers.remove(id);
-      _viewKeys[id] = GlobalKey<BrowserViewState>();
+      _viewKeys[id] = GlobalKey();
     });
   }
 
@@ -271,6 +277,24 @@ class _HomePageState extends State<HomePage> {
         }
       });
       return const SizedBox.shrink();
+    }
+    // macOS 用 CEF（Chromium）承载：Flutter 平台视图层会破坏内嵌
+    // WKWebView 的中文输入法组合，CEF 自带原生 IME 管线。其余平台
+    // 继续用 flutter_inappwebview。
+    if (Platform.isMacOS) {
+      return CefBrowserView(
+        key: _viewKeys[id],
+        device: device,
+        pageZoom: _pageZooms[id]!,
+        onSessionReady: () {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() {});
+          });
+        },
+        onTitleChanged: (title) =>
+            context.read<DeviceStore>().maybeFillRemarkFromTitle(id, title),
+        onReplaceAddress: () => DeviceEditSheet.show(context, editing: device),
+      );
     }
     return BrowserView(
       key: _viewKeys[id],
