@@ -14,7 +14,7 @@ import 'update_dialog.dart';
 /// 收起态：圆形玻璃悬浮球（终端图标），点击展开；可整球拖拽、吸附左右
 /// 边缘；闲置 3 秒自动吸附到最右侧，累计 5 秒透明度降得更低。
 /// 展开态：竖排玻璃工具栏——设备切换、前进/后退/刷新、平移模式、
-/// 可视缩放、页面缩放、页面操作菜单（含桌面版网站开关）；
+/// 可视缩放、页面操作菜单（含桌面版网站开关）；
 /// 按住顶部把手拖动，位置持久化，展开期间不收起、不淡化。
 /// 从设置/面板隐藏后变成贴边细把手，点击恢复。
 class FloatingDock extends StatefulWidget {
@@ -22,7 +22,6 @@ class FloatingDock extends StatefulWidget {
     super.key,
     required this.controller,
     required this.viewKey,
-    required this.pageZoom,
     required this.viewZoom,
     required this.onReplaceAddress,
     required this.onOpenSwitcher,
@@ -35,9 +34,6 @@ class FloatingDock extends StatefulWidget {
 
   /// 当前 BrowserView 的 key，用于调用复制/分享等页面操作。
   final GlobalKey<BrowserViewState>? viewKey;
-
-  /// 页面缩放（重排布局）。
-  final ValueNotifier<double> pageZoom;
 
   /// 可视缩放（只放大可视范围，不重排）。
   final ValueNotifier<double> viewZoom;
@@ -412,21 +408,14 @@ class _FloatingDockState extends State<FloatingDock> {
             _buildPanToggle(),
             const _Divider(),
             // 可视缩放：只放大可视范围，页面布局不变（放大镜图标）。
+            // Android 的双指缩放/平移由 WebView 原生提供，点百分比
+            // 回到 100% 时会连同原生缩放一起复位。
             _zoomGroup(
               notifier: widget.viewZoom,
               step: 0.25,
               zoomInIcon: Icons.zoom_in,
               zoomOutIcon: Icons.zoom_out,
               label: '可视缩放（布局不变）',
-            ),
-            const _Divider(),
-            // 页面缩放：页面自身放大缩小，布局重排（字体图标）。
-            _zoomGroup(
-              notifier: widget.pageZoom,
-              step: 0.1,
-              zoomInIcon: Icons.text_increase,
-              zoomOutIcon: Icons.text_decrease,
-              label: '页面缩放（布局重排）',
             ),
             const _Divider(),
             GlassIconButton(
@@ -512,7 +501,11 @@ class _FloatingDockState extends State<FloatingDock> {
             message: '$label · 点击回到 100%',
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () => _setZoom(notifier, 1.0, step),
+              onTap: () async {
+                _setZoom(notifier, 1.0, step);
+                // Android 原生双指缩放与可视缩放叠加，复位要一起做。
+                await resetNativeZoom(widget.controller);
+              },
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
                 child: Text(

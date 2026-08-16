@@ -146,6 +146,20 @@ String imeEnterGuardScript({required bool webkit}) => '''
 })();
 ''';
 
+/// Android：把 WebView 原生（双指）缩放复位到 100%。
+///
+/// Android 的双指缩放/平移由 WebView 原生处理（已取代被移除的「页面
+/// 缩放」），工具栏「回到 100%」和切换会话的缩放重置都要把它一并
+/// 复位，否则双指放大后点 100% 只复位可视缩放、画面不动。
+/// zoomBy 是相对倍率：当前 scale 的倒数即复位。其他平台没有可编程
+/// 复位的原生缩放，直接跳过。
+Future<void> resetNativeZoom(InAppWebViewController? c) async {
+  if (c == null || !Platform.isAndroid) return;
+  final scale = await c.getZoomScale();
+  if (scale == null || (scale - 1.0).abs() < 0.001) return;
+  await c.zoomBy(zoomFactor: (1.0 / scale).clamp(0.02, 100.0));
+}
+
 /// 单个设备对应的完整功能浏览器视图。
 ///
 /// 覆盖能力：前进/后退/刷新、加载进度、JS 弹窗（alert/confirm/prompt）、
@@ -155,7 +169,6 @@ class BrowserView extends StatefulWidget {
   const BrowserView({
     super.key,
     required this.device,
-    required this.pageZoom,
     required this.viewZoom,
     required this.onControllerReady,
     required this.onTitleChanged,
@@ -163,9 +176,6 @@ class BrowserView extends StatefulWidget {
   });
 
   final RemoteDevice device;
-
-  /// 页面缩放（1.0 = 100%）：CSS zoom，页面布局会重排，类似浏览器 Ctrl +/-。
-  final ValueNotifier<double> pageZoom;
 
   /// 可视缩放（1.0 = 100%）：CSS transform scale，只放大可视范围，布局不重排。
   final ValueNotifier<double> viewZoom;
@@ -197,7 +207,6 @@ class BrowserViewState extends State<BrowserView>
   @override
   void initState() {
     super.initState();
-    widget.pageZoom.addListener(_applyPageZoom);
     widget.viewZoom.addListener(_applyViewZoom);
     // 下拉刷新控制器只有移动端有实现，桌面端构造会抛 UnimplementedError。
     if (Platform.isIOS || Platform.isAndroid) {
@@ -216,7 +225,6 @@ class BrowserViewState extends State<BrowserView>
 
   @override
   void dispose() {
-    widget.pageZoom.removeListener(_applyPageZoom);
     widget.viewZoom.removeListener(_applyViewZoom);
     panMode.dispose();
     super.dispose();
@@ -224,8 +232,11 @@ class BrowserViewState extends State<BrowserView>
 
   /// 开关平移模式：注入/移除页面内的拖拽层，拖动即滚动页面，
   /// 用于放大后把视野挪到关注的位置。桌面用鼠标拖，移动端用单指拖。
+  /// 开启期间停用下拉刷新——它是 WebView 容器自己的滚动行为，
+  /// 会和拖拽层抢手势（顶部下拉时触发刷新而不是平移）。
   Future<void> setPanMode(bool enabled) async {
     panMode.value = enabled;
+    await _pullToRefresh?.setEnabled(!enabled);
     final c = _controller;
     if (c == null) return;
     if (enabled) {
@@ -245,10 +256,20 @@ class BrowserViewState extends State<BrowserView>
     window.__zcodePanCleanup && window.__zcodePanCleanup();
     var el = document.createElement('div');
     el.id = '__zcode_pan_layer';
-    el.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;'
-      + 'z-index:2147483647;cursor:grab;touch-action:none;';
+    // 覆盖层不能只有一屏大：可视缩放（min 尺寸撑大文档）和原生双指
+    // 缩放后，可平移区域远超一屏，固定层若只有 100vw/vh，屏外区域的
+    // 触摸会漏给页面自身滚动，拖动就被 WebView 自己的滚动抢走。
+    // touch-action:none + preventDefault 让拖拽层独占手势（代价是
+    // 平移期间原生双指缩放也不可用，关掉平移即恢复）。
+    el.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;'
+      + 'cursor:grab;touch-action:none;overscroll-behavior:contain;';
     var dragging = false, sx = 0, sy = 0;
-    function down(x, y) { dragging = true; sx = x; sy = y; el.style.cursor = 'grabbing'; }
+    function cover() {
+      var d = document.documentElement;
+      el.style.width = Math.max(window.innerWidth, d.scrollWidth) + 'px';
+      el.style.height = Math.max(window.innerHeight, d.scrollHeight) + 'px';
+    }
+    function down(x, y) { dragging = true; sx = x; sy = y; el.style.cursor = 'grabbing'; cover(); }
     function move(x, y) {
       if (!dragging) return;
       window.scrollBy(sx - x, sy - y);
@@ -265,61 +286,13 @@ class BrowserViewState extends State<BrowserView>
       var t = e.touches[0]; move(t.clientX, t.clientY); e.preventDefault();
     }, { passive: false });
     el.addEventListener('touchend', up);
+    cover();
     document.documentElement.appendChild(el);
     window.__zcodePanCleanup = function() { el.remove(); window.__zcodePanCleanup = null; };
   } catch (e) {}
 })();
 ''',
     );
-  }
-
-  /// 页面缩放（布局重排，等效浏览器整页缩放）。
-  ///
-  /// 实测（用 WKWebView 测试程序验证）：WebKit 下给根节点打 CSS zoom
-  /// 不会重排 vw/vh 和 fixed 布局，页面会错乱；必须用 WKWebView 原生
-  /// pageZoom（Apple 官方说明其等价于浏览器整页缩放）。
-  /// Android WebView：根节点 zoom 同样不生效，zoom 打在 <body> 上。
-  /// Windows WebView2（桌面 Chromium）：CSS zoom 根节点即可正确重排。
-  Future<void> _applyPageZoom() async {
-    final c = _controller;
-    if (c == null) return;
-    final z = widget.pageZoom.value;
-    if (Platform.isIOS || Platform.isMacOS) {
-      final settings = await c.getSettings();
-      if (settings != null) {
-        settings.pageZoom = z;
-        await c.setSettings(settings: settings);
-      }
-    } else if (Platform.isAndroid) {
-      // Android WebView 上根元素(<html>)的 CSS zoom 不生效（v1.1.9 用户
-      // 实测页面缩放无反应；而 body 上的样式可生效——可视缩放的 transform
-      // 就打在 body 上），移动端整页缩放打在 <body> 上才可靠。
-      await c.evaluateJavascript(
-        source:
-            '''
-(function() {
-  try {
-    if (!document.body) return;
-    document.body.style.zoom = ($z === 1) ? '' : '$z';
-    document.documentElement.style.zoom = '';
-  } catch (e) {}
-})();
-''',
-      );
-    } else {
-      // Windows（WebView2，桌面 Chromium）：根元素 zoom 生效，保持原实现。
-      await c.evaluateJavascript(
-        source:
-            '''
-(function() {
-  try {
-    document.documentElement.style.zoom = '$z';
-    if (document.body) document.body.style.zoom = '';
-  } catch (e) {}
-})();
-''',
-      );
-    }
   }
 
   /// 可视缩放：CSS transform scale，只放大可视范围，不改变页面布局。
@@ -625,7 +598,6 @@ class BrowserViewState extends State<BrowserView>
           onLoadStop: (controller, url) async {
             _pullToRefresh?.endRefreshing();
             setState(() => _progress = 1);
-            await _applyPageZoom();
             await _applyViewZoom();
             // 新文档会清掉注入的拖拽层，平移模式开着的话重新注入。
             if (panMode.value) await _injectPanLayer(controller);

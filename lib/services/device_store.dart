@@ -12,7 +12,6 @@ class DeviceStore extends ChangeNotifier {
   static const _kBubbleEnabled = 'bubble_enabled';
   static const _kToolbarDx = 'toolbar_dx';
   static const _kToolbarDy = 'toolbar_dy';
-  static const _kPageZoom = 'page_zoom';
   static const _kViewZoom = 'view_zoom';
   static const _kDesktopMode = 'desktop_mode';
 
@@ -26,8 +25,8 @@ class DeviceStore extends ChangeNotifier {
   double? toolbarDx;
   double? toolbarDy;
 
-  /// 保存的缩放比例：当前会话内刷新后复用，切换会话时重置为 1.0。
-  double savedPageZoom = 1.0;
+  /// 保存的可视缩放比例：当前会话内刷新后复用，切换会话时重置为 1.0。
+  /// （「页面缩放」已移除，历史 page_zoom 键留在本地不再读取。）
   double savedViewZoom = 1.0;
 
   /// 桌面模式：WebView 用桌面版 UA 请求站点，全局偏好。
@@ -58,7 +57,6 @@ class DeviceStore extends ChangeNotifier {
     bubbleEnabled = prefs.getBool(_kBubbleEnabled) ?? true;
     toolbarDx = prefs.getDouble(_kToolbarDx);
     toolbarDy = prefs.getDouble(_kToolbarDy);
-    savedPageZoom = prefs.getDouble(_kPageZoom) ?? 1.0;
     savedViewZoom = prefs.getDouble(_kViewZoom) ?? 1.0;
     desktopMode = prefs.getBool(_kDesktopMode) ?? false;
     notifyListeners();
@@ -176,12 +174,10 @@ class DeviceStore extends ChangeNotifier {
     await prefs.setDouble(_kToolbarDy, dy);
   }
 
-  /// 记录缩放比例（不触发界面通知，纯持久化）。
-  Future<void> setZooms(double pageZoom, double viewZoom) async {
-    savedPageZoom = pageZoom;
+  /// 记录可视缩放比例（不触发界面通知，纯持久化）。
+  Future<void> setZooms(double viewZoom) async {
     savedViewZoom = viewZoom;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_kPageZoom, pageZoom);
     await prefs.setDouble(_kViewZoom, viewZoom);
   }
 
