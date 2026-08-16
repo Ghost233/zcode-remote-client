@@ -107,13 +107,19 @@ ln -sfn Versions/Current/Resources "${FW_DST}/Resources"
 # bundles (embed_cef_helpers.sh clones this into the 5 named .app bundles).
 # It links the wrapper statically; the framework is dlopen'd at runtime
 # (LoadInHelper), so it does not link the framework here.
+#
+# 本仓库补丁：helper 的 main() 第一行 LoadInHelper() dlopen 框架，之后才会
+# 用到 Chromium base 的符号（如 RefCountedThreadSafeBase 析构）。链接期不
+# 指定框架就必须允许未定义符号延迟到运行时解析——上游默认工具链恰好不
+# 报错，而 Xcode 26.3 的 clang 会把内联析构链的引用落进目标文件导致链接
+# 失败。dynamic_lookup 正是"运行时 dlopen"设计的标准搭配。
 echo "==> Building CEF helper executable"
 clang++ -std=c++20 -stdlib=libc++ -mmacosx-version-min=12.0 -w \
   -I "${DEST}" -I "${REPO_ROOT}/common" \
   "${MACOS_DIR}/helper/cef_helper_main.mm" \
   "${DEST}/libcef_dll_wrapper.a" \
   -framework Foundation -framework AppKit \
-  -Wl,-ObjC \
+  -Wl,-ObjC -Wl,-undefined,dynamic_lookup \
   -o "${DEST}/cef_helper"
 [ -f "${DEST}/cef_helper" ] || err "cef_helper was not produced"
 
