@@ -428,7 +428,8 @@ class _FloatingDockState extends State<FloatingDock> {
                     : () => widget.viewKey?.currentState?.openExternal(),
               ),
             _buildPanToggle(),
-            // 双指缩放开关（Android 双指 / macOS 触摸板捏合），默认关。
+            // 双指缩放开关：Android 可用（默认关），macOS 置灰（只有
+            // 整页缩放，没有字体缩放）。
             if (Platform.isAndroid || Platform.isMacOS) _buildPinchToggle(),
             const _Divider(),
             // 页面缩放：浏览器 Ctrl +/- 式缩放（布局重排）。macOS/iOS
@@ -505,8 +506,17 @@ class _FloatingDockState extends State<FloatingDock> {
     );
   }
 
-  /// 双指缩放开关：Android 触屏双指 / macOS 触摸板捏合，默认关闭。
+  /// 双指缩放开关：Android 触屏双指，默认关闭。macOS 置灰不可点——
+  /// WKWebView 只有整页缩放、没有系统级字体缩放（textZoom 是 Android
+  /// 独有），触摸板捏合做出来也是整页缩放，按要求不做。
   Widget _buildPinchToggle() {
+    if (Platform.isMacOS) {
+      return const GlassIconButton(
+        icon: Icons.pinch,
+        tooltip: '双指缩放（macOS 不支持字体缩放，不可用）',
+        onPressed: null,
+      );
+    }
     final view = widget.viewKey?.currentState;
     if (view == null) {
       return const GlassIconButton(
@@ -521,7 +531,7 @@ class _FloatingDockState extends State<FloatingDock> {
         final color = enabled ? Theme.of(context).colorScheme.primary : null;
         return IconButton(
           icon: Icon(Icons.pinch, size: 22, color: color),
-          tooltip: enabled ? '关闭双指缩放' : '双指缩放（触摸板捏合/双指）',
+          tooltip: enabled ? '关闭双指缩放' : '双指缩放（双指捏合）',
           onPressed: () => view.setPinchZoom(!enabled),
           visualDensity: VisualDensity.compact,
           style: IconButton.styleFrom(

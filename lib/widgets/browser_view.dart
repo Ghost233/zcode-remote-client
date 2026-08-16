@@ -1,6 +1,5 @@
 import 'dart:collection' show UnmodifiableListView;
 import 'dart:io' show Platform;
-import 'dart:math' show exp;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -118,8 +117,8 @@ class BrowserViewState extends State<BrowserView>
   /// 平移（抓手）模式开关，工具栏读取/切换。
   final ValueNotifier<bool> panMode = ValueNotifier(false);
 
-  /// 双指缩放开关（Android 触屏双指 / macOS 触摸板捏合），默认关，
-  /// 工具栏读取/切换，选择持久化。
+  /// 双指缩放开关（Android 触屏双指；macOS 触摸板捏合已否决——WKWebView
+  /// 只有整页缩放，没有字体缩放，按钮置灰）。默认关，持久化。
   final ValueNotifier<bool> pinchZoom = ValueNotifier(false);
 
   @override
@@ -129,7 +128,9 @@ class BrowserViewState extends State<BrowserView>
   void initState() {
     super.initState();
     widget.pageZoom.addListener(_applyPageZoom);
-    pinchZoom.value = context.read<DeviceStore>().pinchZoomEnabled;
+    if (Platform.isAndroid) {
+      pinchZoom.value = context.read<DeviceStore>().pinchZoomEnabled;
+    }
     // 下拉刷新控制器只有移动端有实现，桌面端构造会抛 UnimplementedError。
     if (Platform.isIOS || Platform.isAndroid) {
       _pullToRefresh = PullToRefreshController(
@@ -171,27 +172,18 @@ class BrowserViewState extends State<BrowserView>
     }
   }
 
-  /// 开关双指缩放（Android 触屏双指 / macOS 触摸板捏合），持久化选择。
+  /// 开关双指缩放（仅 Android：触屏双指），持久化选择。
   Future<void> setPinchZoom(bool enabled) async {
     pinchZoom.value = enabled;
     context.read<DeviceStore>().setPinchZoomEnabled(enabled);
     final c = _controller;
-    if (c == null) return;
-    if (Platform.isAndroid) {
-      await _applyPinchSettings(c, enabled);
-    } else if (Platform.isMacOS) {
-      if (enabled) {
-        await _injectPinchListener(c);
-      } else {
-        await c.evaluateJavascript(
-          source: 'window.__zcodePinchCleanup && window.__zcodePinchCleanup();',
-        );
-      }
-    }
+    if (c == null || !Platform.isAndroid) return;
+    await _applyPinchSettings(c, enabled);
   }
 
   /// Android：双指缩放 = WebView 缩放设置（supportZoom + 内建缩放控件，
-  /// 不显示系统缩放按钮）。运行时切换即时生效。
+  /// 不显示系统缩放按钮）。运行时切换即时生效；插件默认是开，开关
+  /// 默认关，所以 WebView 创建时也要按开关状态显式应用一次。
   Future<void> _applyPinchSettings(
     InAppWebViewController c,
     bool enabled,
@@ -202,37 +194,6 @@ class BrowserViewState extends State<BrowserView>
     settings.builtInZoomControls = enabled;
     settings.displayZoomControls = false;
     await c.setSettings(settings: settings);
-  }
-
-  /// macOS 触摸板捏合：WebKit 把捏合手势派发为带 ctrlKey 的 wheel 事件，
-  /// 拦截并上报 Dart 调整页面缩放——与 +/- 按钮调同一个值，「回到
-  /// 100%」天然能复位。插件未暴露原生 allowsMagnification，走此通道。
-  Future<void> _injectPinchListener(InAppWebViewController c) {
-    return c.evaluateJavascript(
-      source: '''
-(function() {
-  window.__zcodePinchCleanup && window.__zcodePinchCleanup();
-  var last = 0;
-  function onWheel(e) {
-    if (!e.ctrlKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    // 捏合手势的 wheel 事件很密，节流后再上报，避免刷爆方法通道。
-    var now = Date.now();
-    if (now - last < 40) return;
-    last = now;
-    try {
-      window.flutter_inappwebview.callHandler('__zcodePinch', e.deltaY);
-    } catch (err) {}
-  }
-  window.addEventListener('wheel', onWheel, {passive: false, capture: true});
-  window.__zcodePinchCleanup = function() {
-    window.removeEventListener('wheel', onWheel, {passive: false, capture: true});
-    window.__zcodePinchCleanup = null;
-  };
-})();
-''',
-    );
   }
 
   Future<void> _injectPanLayer(InAppWebViewController c) {
@@ -592,29 +553,9 @@ class BrowserViewState extends State<BrowserView>
           onWebViewCreated: (controller) {
             _controller = controller;
             widget.onControllerReady(controller);
-            // macOS 捏合上报通道：注入脚本把 ctrl+wheel 的 deltaY 传过来，
-            // 这里换算成页面缩放倍率（与 +/- 按钮同一份值）。
-            if (Platform.isMacOS) {
-              controller.addJavaScriptHandler(
-                handlerName: '__zcodePinch',
-                callback: (args) {
-                  final dy = args.isNotEmpty ? args.first : null;
-                  if (dy is! num || dy == 0) return;
-                  final next = (widget.pageZoom.value * exp(-dy * 0.005))
-                      .clamp(0.5, 3.0);
-                  widget.pageZoom.value = double.parse(
-                    next.toStringAsFixed(3),
-                  );
-                },
-              );
-            }
-            // 会话是重建出来的（桌面模式切换等），开关状态要重新应用。
-            if (pinchZoom.value) {
-              if (Platform.isAndroid) {
-                _applyPinchSettings(controller, true);
-              } else if (Platform.isMacOS) {
-                _injectPinchListener(controller);
-              }
+            // 插件默认开双指缩放，开关默认关：创建时按开关状态显式应用。
+            if (Platform.isAndroid) {
+              _applyPinchSettings(controller, pinchZoom.value);
             }
           },
           onLoadStart: (controller, url) {
@@ -627,10 +568,7 @@ class BrowserViewState extends State<BrowserView>
             // 原生缩放（macOS pageZoom / Android textZoom）是 WebView
             // 自身属性，跨加载保留，不重放。
             if (Platform.isWindows) await _applyPageZoom();
-            // 新文档会清掉注入的脚本和拖拽层，开着的话重新注入。
-            if (Platform.isMacOS && pinchZoom.value) {
-              await _injectPinchListener(controller);
-            }
+            // 新文档会清掉注入的拖拽层，平移模式开着的话重新注入。
             if (panMode.value) await _injectPanLayer(controller);
           },
           onProgressChanged: (controller, progress) {
