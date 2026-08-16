@@ -83,14 +83,10 @@ const String kDesktopViewportScript = '''
 /// - 事件环形日志 window.__zcodeImeLog（60 条），排查输入法问题时可从
 ///   控制台或 evaluateJavascript 读取。
 ///
-/// macOS 发送检测（只通知、不动 DOM）：真实回车瞬间编辑框有内容、随后
-/// 被页面清空 = 消息已发出。发出后 WKWebView 的文本输入会话（中文输入
-/// 法依赖，英文直输不依赖）被页面的程序化清空搞失效，脚本调
-/// __zcodeMacSent handler，由 Dart 侧做原生焦点循环（clearFocus +
-/// requestFocus，等价"点输入框外再点回"）强制重建。
-/// 注意：DOM 级 blur+focus 重建不了 IME 会话，还会让中文从首条消息起
-/// 就打不进（v1.1.12 实测教训，已回退），补救只走原生、且只在确认
-/// 发送后触发（空编辑框里按回车不算发送）。
+/// macOS 输入问题的处理边界（v1.2.5 定论）：本脚本只做组合态回车防护，
+/// 不再对"发送后输入会话失效"做任何补救——v1.1.12（DOM 级 blur+focus）
+/// 和 v1.2.4（原生焦点循环）两次尝试都没修好，还各引入新问题。应急
+/// 手段：点输入框外再点回，或用工具栏的系统浏览器按钮。
 String imeEnterGuardScript({required bool webkit}) => '''
 (function() {
   if (window.__zcodeImeGuard) return;
@@ -152,43 +148,6 @@ String imeEnterGuardScript({required bool webkit}) => '''
   window.addEventListener('keydown', guard, true);
   window.addEventListener('keypress', guard, true);
   window.addEventListener('keyup', guard, true);
-  if (IS_WEBKIT) {
-    // 发送检测（仅 macOS）。注册在 guard 之后：guard 吞掉的幽灵回车
-    // 不会到达这里，这里看到的只会是用户真实的回车。回车瞬间编辑框
-    // 有内容、随后被清空 = 发送成功；只上报，不做任何 DOM 操作。
-    window.addEventListener('keydown', function(e) {
-      if (e.key !== 'Enter' && e.keyCode !== 13) return;
-      var el = document.activeElement;
-      if (!el) return;
-      // 不用正则判断标签：正则行尾锚点符会和 Dart 字符串插值词法冲突。
-      var tag = (el.tagName || '').toUpperCase();
-      var editable = el.isContentEditable ||
-          tag === 'INPUT' || tag === 'TEXTAREA';
-      if (!editable) return;
-      var hadText = el.isContentEditable
-          ? (el.textContent || '').trim() !== ''
-          : !!el.value;
-      if (!hadText) return;
-      var checks = 0;
-      var timer = setInterval(function() {
-        checks++;
-        var stillFocused = document.activeElement === el;
-        var empty = stillFocused && (el.isContentEditable
-            ? (el.textContent || '').trim() === ''
-            : !el.value);
-        if (empty) {
-          clearInterval(timer);
-          rec({type: 'sent'});
-          try {
-            window.flutter_inappwebview
-                .callHandler('__zcodeMacSent');
-          } catch (err) {}
-        } else if (checks >= 6 || !stillFocused) {
-          clearInterval(timer);
-        }
-      }, 100);
-    }, true);
-  }
 })();
 ''';
 
@@ -657,23 +616,6 @@ class BrowserViewState extends State<BrowserView>
           onWebViewCreated: (controller) {
             _controller = controller;
             widget.onControllerReady(controller);
-            // macOS 发送后原生焦点循环（IME 会话自愈）：注入脚本确认一条
-            // 消息发出后回调这里。等价"点输入框外再点回"——把 first
-            // responder 从 WKWebView 摘下再装回，WebKit 会丢弃失效的
-            // 文本输入会话、按需重建（原生层动作，带窗口激活，这也是
-            // v1.1.12 的 DOM blur+focus 做不到的）。注：重新成为 first
-            // responder 后 WKWebView 会恢复页面内的 DOM 焦点，用户
-            // 无感；副作用是发送后若正用候选词浮窗敲下一条消息，浮窗
-            // 会闪一下。
-            if (Platform.isMacOS) {
-              controller.addJavaScriptHandler(
-                handlerName: '__zcodeMacSent',
-                callback: (_) async {
-                  await controller.clearFocus();
-                  await controller.requestFocus();
-                },
-              );
-            }
           },
           onLoadStart: (controller, url) {
             setState(() => _mainFrameError = null);
@@ -681,7 +623,11 @@ class BrowserViewState extends State<BrowserView>
           onLoadStop: (controller, url) async {
             _pullToRefresh?.endRefreshing();
             setState(() => _progress = 1);
-            await _applyPageZoom();
+            // Windows 的 CSS 缩放打在文档上，新文档会丢，加载完重打。
+            // 原生缩放（macOS pageZoom / Android textZoom）是 WebView
+            // 自身属性，跨加载保留，不重放——macOS 还曾因加载后全量
+            // 重发设置干扰输入（v1.2.3 教训）。
+            if (Platform.isWindows) await _applyPageZoom();
             // 新文档会清掉注入的拖拽层，平移模式开着的话重新注入。
             if (panMode.value) await _injectPanLayer(controller);
           },

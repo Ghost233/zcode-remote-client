@@ -266,10 +266,11 @@ class _FloatingDockState extends State<FloatingDock> {
         _containerW = constraints.maxWidth;
         _containerH = constraints.maxHeight;
         final width = _expanded ? _barWidth : _bubbleSize;
-        // macOS 多一个「系统浏览器打开」按钮，展开态估高多一些（仅用于
-        // 拖动范围钳制，超高由 SingleChildScrollView 兜底）。
+        // macOS 多「系统浏览器打开」、Android 多「双指缩放复位」按钮，
+        // 展开态估高多一些（仅用于拖动范围钳制，超高由
+        // SingleChildScrollView 兜底）。
         final estimatedHeight = _expanded
-            ? (Platform.isMacOS ? 570.0 : 530.0)
+            ? (Platform.isMacOS || Platform.isAndroid ? 570.0 : 530.0)
             : _bubbleSize;
         final maxX = (constraints.maxWidth - width).clamp(0.0, double.infinity);
         final maxY = (constraints.maxHeight - estimatedHeight).clamp(
@@ -423,12 +424,15 @@ class _FloatingDockState extends State<FloatingDock> {
                     : () => widget.viewKey?.currentState?.openExternal(),
               ),
             _buildPanToggle(),
+            // 双指缩放复位（仅 Android）：双指缩放不经应用内任何通知器，
+            // 字体缩放那组的 100% 管不到它，必须单独给复位入口。
+            if (Platform.isAndroid) _buildPinchReset(),
             const _Divider(),
             // 页面缩放：浏览器 Ctrl +/- 式缩放（布局重排）。macOS/iOS
             // 走 WKWebView 原生 pageZoom，Windows 走根节点 CSS zoom，
             // Android 是系统级字体缩放 textZoom（字体放大、按新字号
-            // 重排，fixed 输入框不跑位）。点百分比回到 100% 时会把
-            // Android 双指缩放也一并复位。
+            // 重排，fixed 输入框不跑位）。中间百分比回到 100% 只复位
+            // 这一组（Android 双指缩放的复位在平移开关下面）。
             _zoomGroup(
               notifier: widget.pageZoom,
               step: 0.25,
@@ -499,6 +503,27 @@ class _FloatingDockState extends State<FloatingDock> {
     );
   }
 
+  /// Android：双指缩放回到 100%（放在平移开关下面——都是手势类的
+  /// 视野操作）。字体缩放的复位在 +/- 组中间，两者各管各的。
+  Widget _buildPinchReset() {
+    return Tooltip(
+      message: '双指缩放回到 100%',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: widget.controller == null
+            ? null
+            : () => resetNativeZoom(widget.controller),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+          child: Text(
+            '100%',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _zoomGroup({
     required ValueNotifier<double> notifier,
     required double step,
@@ -520,11 +545,8 @@ class _FloatingDockState extends State<FloatingDock> {
             message: '$label · 点击回到 100%',
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () async {
+              onTap: () {
                 _setZoom(notifier, 1.0, step);
-                // 双指缩放与页面缩放互相独立，复位要显式带上
-                // （resetNativeZoom 仅 Android 生效）。
-                await resetNativeZoom(widget.controller);
               },
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
