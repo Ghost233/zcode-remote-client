@@ -169,6 +169,17 @@ jobs:
 
       - run: flutter pub get
 
+      # 先单独 pod install（flutter build 内部会复用），并打印生成的
+      # Pods-Runner xcconfig——webview_cef 框架名带空格，链接参数的分词
+      # 问题定位依赖这份内容（上游 issue #27/#178）。
+      - name: pod install（含 xcconfig 诊断输出）
+        run: |
+          cd macos && pod install
+          echo "===== Pods-Runner.release.xcconfig ====="
+          cat "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig" || true
+          echo "===== webview_cef.release.xcconfig ====="
+          cat "Pods/Target Support Files/webview_cef/webview_cef.release.xcconfig" || true
+
       - run: >-
           flutter build macos --release --obfuscate
           --split-debug-info=build/symbols-macos

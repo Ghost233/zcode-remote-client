@@ -65,3 +65,25 @@ post_install do |installer|
     end
   end
 end
+
+post_integrate do |installer|
+  # webview_cef 的 CEF 框架名带空格："Chromium Embedded Framework"。
+  # CocoaPods 写进 Pods-Runner xcconfig 的 -framework 参数在新版
+  # Xcode 的 xcconfig 分词下会被拆成多个词，clang 收到裸的
+  # 'Embedded' 'Framework' 文件参数而失败（上游 issue #27/#178）。
+  # xcconfig 落盘后统一改写成转义引号形式，任一分词行为下都安全。
+  fixes = [
+    [/-framework\s+"Chromium Embedded Framework"/,
+     '-framework \\"Chromium Embedded Framework\\"'],
+    [/-framework\s+Chromium\\ Embedded\\ Framework/,
+     '-framework \\"Chromium Embedded Framework\\"'],
+    [/-framework\s+Chromium Embedded Framework/,
+     '-framework \\"Chromium Embedded Framework\\"'],
+  ]
+  Dir.glob(File.join(__dir__, 'Pods/Target Support Files/**/*.xcconfig')).each do |f|
+    txt = File.read(f)
+    fixed = txt
+    fixes.each { |pat, rep| fixed = fixed.gsub(pat, rep) }
+    File.write(f, fixed) if fixed != txt
+  end
+end
