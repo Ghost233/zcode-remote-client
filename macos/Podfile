@@ -73,6 +73,11 @@ post_integrate do |installer|
   # 'Embedded' 'Framework' 文件参数而失败（上游 issue #27/#178）。
   # xcconfig 落盘后统一改写成转义引号形式，任一分词行为下都安全。
   fixes = [
+    # CocoaPods 1.17 实际生成的损坏形态（CI 日志实测）：
+    #   -ObjC Embedded Framework -framework "Chromium"
+    ['-ObjC Embedded Framework -framework "Chromium"',
+     '-ObjC -framework \\"Chromium Embedded Framework\\"'],
+    # 其余历史/变体形态兜底。
     [/-framework\s+"Chromium Embedded Framework"/,
      '-framework \\"Chromium Embedded Framework\\"'],
     [/-framework\s+Chromium\\ Embedded\\ Framework/,
