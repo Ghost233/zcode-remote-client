@@ -19,13 +19,16 @@ namespace webview_cef {
 	std::string g_macSubprocessPath;
 	std::string g_macFrameworkDirPath;
 	std::string g_macMainBundlePath;
+	std::string g_macUserDataDir;
 
 	void setMacCEFPaths(const std::string& subprocessPath,
 	                    const std::string& frameworkDirPath,
-	                    const std::string& mainBundlePath) {
+	                    const std::string& mainBundlePath,
+	                    const std::string& userDataDir) {
 		g_macSubprocessPath = subprocessPath;
 		g_macFrameworkDirPath = frameworkDirPath;
 		g_macMainBundlePath = mainBundlePath;
+		g_macUserDataDir = userDataDir;
 	}
 #endif
 
@@ -717,6 +720,13 @@ namespace webview_cef {
 		}
 		if (!g_macMainBundlePath.empty()) {
 			CefString(&cefs.main_bundle_path) = g_macMainBundlePath;
+		}
+		// 本仓库补丁：用户数据目录必须按应用隔离。CEF 默认用全局共享的
+		// ~/Library/Application Support/CEF——多实例/与其他 CEF 应用同跑会
+		// 互相干扰（进程单例、缓存串号），沙盒下还会写穿容器。平台层用
+		// NSSearchPath 传入本应用专属目录。
+		if (!g_macUserDataDir.empty()) {
+			CefString(&cefs.root_cache_path) = g_macUserDataDir;
 		}
 #else
 		//cef message run in another thread on windows/linux

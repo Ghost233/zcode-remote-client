@@ -70,7 +70,8 @@ namespace webview_cef {
     // helper sub-processes. Must be called before startCEF().
     void setMacCEFPaths(const std::string& subprocessPath,
                         const std::string& frameworkDirPath,
-                        const std::string& mainBundlePath);
+                        const std::string& mainBundlePath,
+                        const std::string& userDataDir);
 #endif
     void doMessageLoopWork();
     void SwapBufferFromBgraToRgba(void* _dest, const void* _src, int width, int height);

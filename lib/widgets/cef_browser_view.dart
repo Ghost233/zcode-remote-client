@@ -78,10 +78,13 @@ class CefBrowserViewState extends State<CefBrowserView>
   }
 
   Future<void> _init() async {
+    debugPrint('[cef] 会话初始化开始: ${widget.device.url}');
     try {
       _cefReadyFuture ??= WebviewManager().initialize();
       await _cefReadyFuture;
-    } catch (_) {
+      debugPrint('[cef] CEF 引擎就绪');
+    } catch (e) {
+      debugPrint('[cef] CEF 引擎初始化失败: $e');
       _cefReadyFuture = null; // 失败不缓存，下次创建会话可重试
       return; // CEF 初始化失败：停留加载态，用户可换系统浏览器。
     }
@@ -109,7 +112,13 @@ class CefBrowserViewState extends State<CefBrowserView>
       ),
     );
     _controller = c;
-    await c.initialize(widget.device.url);
+    try {
+      await c.initialize(widget.device.url);
+    } catch (e) {
+      debugPrint('[cef] 浏览器创建失败: $e');
+      return;
+    }
+    debugPrint('[cef] 浏览器已创建');
     if (!mounted) return;
     setState(() {});
     widget.onSessionReady();

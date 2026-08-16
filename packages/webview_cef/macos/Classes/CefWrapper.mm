@@ -395,9 +395,24 @@ private:
             // Apps that embed webview_cef but haven't added the helper target
             // fall back to single-process (handled in initCEFProcesses).
             if ([[NSFileManager defaultManager] fileExistsAtPath:subprocessPath]) {
+                // 本应用专属的 CEF 用户数据目录（NSSearchPath 在沙盒应用里
+                // 自动解析进容器，避免 CEF 默认的全局共享目录）。
+                NSArray* supportDirs = NSSearchPathForDirectoriesInDomains(
+                    NSApplicationSupportDirectory, NSUserDomainMask, YES);
+                NSString* userDataDir = @"";
+                if (supportDirs.count > 0) {
+                    NSString* appId = [mainBundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+                    if (appId == nil || appId.length == 0) {
+                        appId = [mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
+                    }
+                    userDataDir = [[supportDirs[0]
+                        stringByAppendingPathComponent:(appId ?: @"webview_cef")]
+                        stringByAppendingPathComponent:@"CEF"];
+                }
                 webview_cef::setMacCEFPaths(std::string([subprocessPath UTF8String]),
                                             std::string([frameworkDir UTF8String]),
-                                            std::string([bundlePath UTF8String]));
+                                            std::string([bundlePath UTF8String]),
+                                            std::string([userDataDir UTF8String]));
             }
             webview_cef::initCEFProcesses();
             isCefProcessInit = YES;
