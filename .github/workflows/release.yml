@@ -276,6 +276,10 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          # 上传用的是 v7（未记录产物摘要），v8 下载默认严格校验摘要会
+          # 误报 digest-mismatch；降为警告。
+          digest-mismatch: warn
+        with:
           path: dist
           merge-multiple: true
 
