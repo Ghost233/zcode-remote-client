@@ -278,7 +278,8 @@ class BrowserViewState extends State<BrowserView>
   /// 实测（用 WKWebView 测试程序验证）：WebKit 下给根节点打 CSS zoom
   /// 不会重排 vw/vh 和 fixed 布局，页面会错乱；必须用 WKWebView 原生
   /// pageZoom（Apple 官方说明其等价于浏览器整页缩放）。
-  /// Chromium 系（Android / Windows WebView2）用 CSS zoom 根节点即可正确重排。
+  /// Android WebView：根节点 zoom 同样不生效，zoom 打在 <body> 上。
+  /// Windows WebView2（桌面 Chromium）：CSS zoom 根节点即可正确重排。
   Future<void> _applyPageZoom() async {
     final c = _controller;
     if (c == null) return;
@@ -289,7 +290,24 @@ class BrowserViewState extends State<BrowserView>
         settings.pageZoom = z;
         await c.setSettings(settings: settings);
       }
+    } else if (Platform.isAndroid) {
+      // Android WebView 上根元素(<html>)的 CSS zoom 不生效（v1.1.9 用户
+      // 实测页面缩放无反应；而 body 上的样式可生效——可视缩放的 transform
+      // 就打在 body 上），移动端整页缩放打在 <body> 上才可靠。
+      await c.evaluateJavascript(
+        source:
+            '''
+(function() {
+  try {
+    if (!document.body) return;
+    document.body.style.zoom = ($z === 1) ? '' : '$z';
+    document.documentElement.style.zoom = '';
+  } catch (e) {}
+})();
+''',
+      );
     } else {
+      // Windows（WebView2，桌面 Chromium）：根元素 zoom 生效，保持原实现。
       await c.evaluateJavascript(
         source:
             '''

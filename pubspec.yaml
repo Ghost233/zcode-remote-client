@@ -18,7 +18,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # of the product and file versions while build-number is used as the build suffix.
 # 版本号只写 X.Y.Z（发版时 +0.0.1）；build 号不手写，
 # 由 CI 用 --build-number 注入（提交数+1000），见 .github/workflows/release.yml
-version: 1.1.9
+version: 1.1.10
 
 environment:
   sdk: ^3.12.2
