@@ -266,11 +266,15 @@ class _FloatingDockState extends State<FloatingDock> {
         _containerW = constraints.maxWidth;
         _containerH = constraints.maxHeight;
         final width = _expanded ? _barWidth : _bubbleSize;
-        // macOS 多「系统浏览器打开」、Android 多「双指缩放复位」按钮，
+        // macOS 多「系统浏览器打开」+「双指缩放」，Android 多「双指缩放」，
         // 展开态估高多一些（仅用于拖动范围钳制，超高由
         // SingleChildScrollView 兜底）。
         final estimatedHeight = _expanded
-            ? (Platform.isMacOS || Platform.isAndroid ? 570.0 : 530.0)
+            ? (Platform.isMacOS
+                  ? 610.0
+                  : Platform.isAndroid
+                  ? 570.0
+                  : 530.0)
             : _bubbleSize;
         final maxX = (constraints.maxWidth - width).clamp(0.0, double.infinity);
         final maxY = (constraints.maxHeight - estimatedHeight).clamp(
@@ -424,15 +428,13 @@ class _FloatingDockState extends State<FloatingDock> {
                     : () => widget.viewKey?.currentState?.openExternal(),
               ),
             _buildPanToggle(),
-            // 双指缩放复位（仅 Android）：双指缩放不经应用内任何通知器，
-            // 字体缩放那组的 100% 管不到它，必须单独给复位入口。
-            if (Platform.isAndroid) _buildPinchReset(),
+            // 双指缩放开关（Android 双指 / macOS 触摸板捏合），默认关。
+            if (Platform.isAndroid || Platform.isMacOS) _buildPinchToggle(),
             const _Divider(),
             // 页面缩放：浏览器 Ctrl +/- 式缩放（布局重排）。macOS/iOS
-            // 走 WKWebView 原生 pageZoom，Windows 走根节点 CSS zoom，
-            // Android 是系统级字体缩放 textZoom（字体放大、按新字号
-            // 重排，fixed 输入框不跑位）。中间百分比回到 100% 只复位
-            // 这一组（Android 双指缩放的复位在平移开关下面）。
+            // 走 WKWebView 原生 pageZoom（macOS 捏合也调它），Windows
+            // 走根节点 CSS zoom，Android 是系统级字体缩放 textZoom
+            // （字体放大、按新字号重排，fixed 输入框不跑位）。
             _zoomGroup(
               notifier: widget.pageZoom,
               step: 0.25,
@@ -503,24 +505,33 @@ class _FloatingDockState extends State<FloatingDock> {
     );
   }
 
-  /// Android：双指缩放回到 100%（放在平移开关下面——都是手势类的
-  /// 视野操作）。字体缩放的复位在 +/- 组中间，两者各管各的。
-  Widget _buildPinchReset() {
-    return Tooltip(
-      message: '双指缩放回到 100%',
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: widget.controller == null
-            ? null
-            : () => resetNativeZoom(widget.controller),
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-          child: Text(
-            '100%',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+  /// 双指缩放开关：Android 触屏双指 / macOS 触摸板捏合，默认关闭。
+  Widget _buildPinchToggle() {
+    final view = widget.viewKey?.currentState;
+    if (view == null) {
+      return const GlassIconButton(
+        icon: Icons.pinch,
+        tooltip: '双指缩放（页面未就绪）',
+        onPressed: null,
+      );
+    }
+    return ValueListenableBuilder<bool>(
+      valueListenable: view.pinchZoom,
+      builder: (context, enabled, _) {
+        final color = enabled ? Theme.of(context).colorScheme.primary : null;
+        return IconButton(
+          icon: Icon(Icons.pinch, size: 22, color: color),
+          tooltip: enabled ? '关闭双指缩放' : '双指缩放（触摸板捏合/双指）',
+          onPressed: () => view.setPinchZoom(!enabled),
+          visualDensity: VisualDensity.compact,
+          style: IconButton.styleFrom(
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            backgroundColor: enabled
+                ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.15)
+                : null,
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -545,8 +556,11 @@ class _FloatingDockState extends State<FloatingDock> {
             message: '$label · 点击回到 100%',
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () {
+              onTap: () async {
                 _setZoom(notifier, 1.0, step);
+                // 两个缩放一起复位：页面/字体缩放 + Android 双指缩放
+                // （resetNativeZoom 仅 Android 生效）。
+                await resetNativeZoom(widget.controller);
               },
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),

@@ -14,6 +14,7 @@ class DeviceStore extends ChangeNotifier {
   static const _kToolbarDy = 'toolbar_dy';
   static const _kPageZoom = 'page_zoom';
   static const _kDesktopMode = 'desktop_mode';
+  static const _kPinchZoom = 'pinch_zoom_enabled';
 
   List<RemoteDevice> devices = [];
   String? currentId;
@@ -32,6 +33,9 @@ class DeviceStore extends ChangeNotifier {
 
   /// 桌面模式：WebView 用桌面版 UA 请求站点，全局偏好。
   bool desktopMode = false;
+
+  /// 双指缩放（Android 触屏双指 / macOS 触摸板捏合）开关，默认关闭。
+  bool pinchZoomEnabled = false;
 
   RemoteDevice? get current {
     if (currentId == null) return null;
@@ -60,6 +64,7 @@ class DeviceStore extends ChangeNotifier {
     toolbarDy = prefs.getDouble(_kToolbarDy);
     savedPageZoom = prefs.getDouble(_kPageZoom) ?? 1.0;
     desktopMode = prefs.getBool(_kDesktopMode) ?? false;
+    pinchZoomEnabled = prefs.getBool(_kPinchZoom) ?? false;
     notifyListeners();
   }
 
@@ -187,6 +192,13 @@ class DeviceStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kDesktopMode, enabled);
     notifyListeners();
+  }
+
+  /// 记录双指缩放开关（不触发界面通知，纯持久化）。
+  Future<void> setPinchZoomEnabled(bool enabled) async {
+    pinchZoomEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kPinchZoom, enabled);
   }
 
   /// 列表展示名：用户备注 > URL name 参数 > mid 短码 > host。

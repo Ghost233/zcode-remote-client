@@ -1,5 +1,6 @@
 import 'dart:collection' show UnmodifiableListView;
 import 'dart:io' show Platform;
+import 'dart:math' show exp;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -56,100 +57,11 @@ const String kDesktopViewportScript = '''
 })();
 ''';
 
-/// 输入法组合态回车保护 v2。
-///
-/// 要同时扛住两类引擎行为：
-/// 1) Chromium（Android/Windows）：组合中的按键 keydown 恒为 keyCode=229，
-///    提交组合的那次回车要么被内核消费、要么以 229 形态到达（符合规范）。
-/// 2) WebKit（macOS/iOS 内核，Bug 165004，2026-04 才修，存量系统带病）：
-///    先派发 compositionend（组合文本上屏），之后才派发"提交组合的那次
-///    回车"，且 isComposing=false——对页面完全伪装成普通回车。网页自身
-///    的 isComposing 防御（如 ZCode 的 Lexical 输入框）因此全部失效，
-///    表现为：/com 组合中按回车 → 直接执行了高亮建议 /compact。
-///
-/// 防线（业界同款：ProseMirror/CodeMirror 6 的 Safari 一次性吞键窗口、
-/// stum.de 的非回车键复位、MDN 的 isComposing||229 双查）：
-/// - window 捕获阶段拦截 Enter 形状的 keydown/keypress/keyup，判定命中
-///   组合态时 stopImmediatePropagation；只 stop、绝不 preventDefault——
-///   组合期取消 keydown 会杀掉输入法上屏（W3C UI Events）。
-/// - 判定：e.isComposing || 自维护组合标志（compositionend 后延迟清零）
-///   || keyCode/which=229 || key='Process'。
-/// - WebKit 专属兜底（仅 macOS 启用）：compositionend 后 300ms 内的第一记
-///   回车视为"提交组合的那次按键"，一次性吞掉；期间若先来了任何非回车
-///   keydown（空格/数字选词的尾随按键），说明组合不是回车确认的，撤销
-///   窗口，避免误吞用户随后的真实回车。iOS 不启用（可能根本不派发尾随
-///   回车，盲开会吞掉用户选词后的真实回车）；Chromium 不需要（尾随回车
-///   在 compositionend 之前已到达）。
-/// - 事件环形日志 window.__zcodeImeLog（60 条），排查输入法问题时可从
-///   控制台或 evaluateJavascript 读取。
-///
-/// macOS 输入问题的处理边界（v1.2.5 定论）：本脚本只做组合态回车防护，
-/// 不再对"发送后输入会话失效"做任何补救——v1.1.12（DOM 级 blur+focus）
-/// 和 v1.2.4（原生焦点循环）两次尝试都没修好，还各引入新问题。应急
-/// 手段：点输入框外再点回，或用工具栏的系统浏览器按钮。
-String imeEnterGuardScript({required bool webkit}) => '''
-(function() {
-  if (window.__zcodeImeGuard) return;
-  window.__zcodeImeGuard = true;
-  var IS_WEBKIT = ${webkit ? 'true' : 'false'};
-  var GRACE_MS = 300;
-  var composing = false;
-  var endedAt = 0;
-  var swallowOnce = false;
-  var swallowKeyup = false;
-  var log = [];
-  window.__zcodeImeLog = log;
-  function rec(o) {
-    o.t = Date.now();
-    log.push(o);
-    if (log.length > 60) log.shift();
-  }
-  window.addEventListener('compositionstart', function() {
-    composing = true;
-    rec({type: 'compositionstart'});
-  }, true);
-  window.addEventListener('compositionend', function() {
-    endedAt = Date.now();
-    if (IS_WEBKIT) swallowOnce = true;
-    // 延迟清零扛"end 与回车同批派发"，但独立的回车任务到来前定时器可能
-    // 已执行——WebKit 的主要防线是上面的一次性窗口。
-    setTimeout(function() { composing = false; }, 0);
-    rec({type: 'compositionend'});
-  }, true);
-  function guard(e) {
-    var enter = e.key === 'Enter' || e.keyCode === 13;
-    if (!enter) {
-      // 非回车 keydown 先到：组合是用空格/数字等别的键确认的（其尾随
-      // keydown 现在才到），撤销吞键窗口，防误吞用户随后的真实回车。
-      if (e.type === 'keydown' && swallowOnce) swallowOnce = false;
-      return;
-    }
-    var owned = e.isComposing || composing ||
-        e.keyCode === 229 || e.which === 229 || e.key === 'Process';
-    if (!owned && swallowOnce) {
-      if (Date.now() - endedAt < GRACE_MS) owned = true;
-      else swallowOnce = false;
-    }
-    rec({type: e.type, key: e.key, keyCode: e.keyCode,
-         isComposing: !!e.isComposing, owned: owned});
-    if (!owned) {
-      swallowKeyup = false;
-      return;
-    }
-    if (e.type === 'keydown') {
-      swallowOnce = false;
-      swallowKeyup = true;
-    } else if (e.type === 'keyup' && swallowKeyup) {
-      swallowKeyup = false;
-    }
-    e.stopImmediatePropagation();
-    e.stopPropagation();
-  }
-  window.addEventListener('keydown', guard, true);
-  window.addEventListener('keypress', guard, true);
-  window.addEventListener('keyup', guard, true);
-})();
-''';
+/// 输入防护脚本已全部移除（v1.2.6）：自 v1.1.3 加入的 IME 组合态回车
+/// 防护与后续所有发送后补救尝试都没能根治 macOS 中文输入问题，回到
+/// v1.0.x 的裸 WebView 状态重新分析。已知副作用（回归预期内，遇到请
+/// 记录反馈）：macOS 上组词途中按回车可能被页面误当成普通回车执行
+/// 命令（WebKit Bug 165004）。
 
 /// Android：把 WebView 原生（双指）缩放复位到 100%。
 ///
@@ -206,6 +118,10 @@ class BrowserViewState extends State<BrowserView>
   /// 平移（抓手）模式开关，工具栏读取/切换。
   final ValueNotifier<bool> panMode = ValueNotifier(false);
 
+  /// 双指缩放开关（Android 触屏双指 / macOS 触摸板捏合），默认关，
+  /// 工具栏读取/切换，选择持久化。
+  final ValueNotifier<bool> pinchZoom = ValueNotifier(false);
+
   @override
   bool get wantKeepAlive => true;
 
@@ -213,6 +129,7 @@ class BrowserViewState extends State<BrowserView>
   void initState() {
     super.initState();
     widget.pageZoom.addListener(_applyPageZoom);
+    pinchZoom.value = context.read<DeviceStore>().pinchZoomEnabled;
     // 下拉刷新控制器只有移动端有实现，桌面端构造会抛 UnimplementedError。
     if (Platform.isIOS || Platform.isAndroid) {
       _pullToRefresh = PullToRefreshController(
@@ -232,6 +149,7 @@ class BrowserViewState extends State<BrowserView>
   void dispose() {
     widget.pageZoom.removeListener(_applyPageZoom);
     panMode.dispose();
+    pinchZoom.dispose();
     super.dispose();
   }
 
@@ -251,6 +169,70 @@ class BrowserViewState extends State<BrowserView>
         source: 'window.__zcodePanCleanup && window.__zcodePanCleanup();',
       );
     }
+  }
+
+  /// 开关双指缩放（Android 触屏双指 / macOS 触摸板捏合），持久化选择。
+  Future<void> setPinchZoom(bool enabled) async {
+    pinchZoom.value = enabled;
+    context.read<DeviceStore>().setPinchZoomEnabled(enabled);
+    final c = _controller;
+    if (c == null) return;
+    if (Platform.isAndroid) {
+      await _applyPinchSettings(c, enabled);
+    } else if (Platform.isMacOS) {
+      if (enabled) {
+        await _injectPinchListener(c);
+      } else {
+        await c.evaluateJavascript(
+          source: 'window.__zcodePinchCleanup && window.__zcodePinchCleanup();',
+        );
+      }
+    }
+  }
+
+  /// Android：双指缩放 = WebView 缩放设置（supportZoom + 内建缩放控件，
+  /// 不显示系统缩放按钮）。运行时切换即时生效。
+  Future<void> _applyPinchSettings(
+    InAppWebViewController c,
+    bool enabled,
+  ) async {
+    final settings = await c.getSettings();
+    if (settings == null) return;
+    settings.supportZoom = enabled;
+    settings.builtInZoomControls = enabled;
+    settings.displayZoomControls = false;
+    await c.setSettings(settings: settings);
+  }
+
+  /// macOS 触摸板捏合：WebKit 把捏合手势派发为带 ctrlKey 的 wheel 事件，
+  /// 拦截并上报 Dart 调整页面缩放——与 +/- 按钮调同一个值，「回到
+  /// 100%」天然能复位。插件未暴露原生 allowsMagnification，走此通道。
+  Future<void> _injectPinchListener(InAppWebViewController c) {
+    return c.evaluateJavascript(
+      source: '''
+(function() {
+  window.__zcodePinchCleanup && window.__zcodePinchCleanup();
+  var last = 0;
+  function onWheel(e) {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // 捏合手势的 wheel 事件很密，节流后再上报，避免刷爆方法通道。
+    var now = Date.now();
+    if (now - last < 40) return;
+    last = now;
+    try {
+      window.flutter_inappwebview.callHandler('__zcodePinch', e.deltaY);
+    } catch (err) {}
+  }
+  window.addEventListener('wheel', onWheel, {passive: false, capture: true});
+  window.__zcodePinchCleanup = function() {
+    window.removeEventListener('wheel', onWheel, {passive: false, capture: true});
+    window.__zcodePinchCleanup = null;
+  };
+})();
+''',
+    );
   }
 
   Future<void> _injectPanLayer(InAppWebViewController c) {
@@ -579,21 +561,15 @@ class BrowserViewState extends State<BrowserView>
                 ? UserPreferredContentMode.DESKTOP
                 : UserPreferredContentMode.RECOMMENDED,
           ),
-          // 常驻：输入法组合态回车保护（修中文输入法组词途中回车误发送/
-          // 误执行命令）；forMainFrameOnly: false 让脚本进所有 frame。
-          // 桌面模式追加视口脚本。
-          initialUserScripts: UnmodifiableListView([
-            UserScript(
-              source: imeEnterGuardScript(webkit: Platform.isMacOS),
-              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-              forMainFrameOnly: false,
-            ),
-            if (desktopMode)
-              UserScript(
-                source: kDesktopViewportScript,
-                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-              ),
-          ]),
+          // 桌面模式注入视口脚本（把 viewport 钉在桌面宽度）。
+          initialUserScripts: desktopMode
+              ? UnmodifiableListView([
+                  UserScript(
+                    source: kDesktopViewportScript,
+                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                  ),
+                ])
+              : null,
           pullToRefreshController: _pullToRefresh,
           contextMenu: ContextMenu(
             settings: ContextMenuSettings(
@@ -616,6 +592,30 @@ class BrowserViewState extends State<BrowserView>
           onWebViewCreated: (controller) {
             _controller = controller;
             widget.onControllerReady(controller);
+            // macOS 捏合上报通道：注入脚本把 ctrl+wheel 的 deltaY 传过来，
+            // 这里换算成页面缩放倍率（与 +/- 按钮同一份值）。
+            if (Platform.isMacOS) {
+              controller.addJavaScriptHandler(
+                handlerName: '__zcodePinch',
+                callback: (args) {
+                  final dy = args.isNotEmpty ? args.first : null;
+                  if (dy is! num || dy == 0) return;
+                  final next = (widget.pageZoom.value * exp(-dy * 0.005))
+                      .clamp(0.5, 3.0);
+                  widget.pageZoom.value = double.parse(
+                    next.toStringAsFixed(3),
+                  );
+                },
+              );
+            }
+            // 会话是重建出来的（桌面模式切换等），开关状态要重新应用。
+            if (pinchZoom.value) {
+              if (Platform.isAndroid) {
+                _applyPinchSettings(controller, true);
+              } else if (Platform.isMacOS) {
+                _injectPinchListener(controller);
+              }
+            }
           },
           onLoadStart: (controller, url) {
             setState(() => _mainFrameError = null);
@@ -625,10 +625,12 @@ class BrowserViewState extends State<BrowserView>
             setState(() => _progress = 1);
             // Windows 的 CSS 缩放打在文档上，新文档会丢，加载完重打。
             // 原生缩放（macOS pageZoom / Android textZoom）是 WebView
-            // 自身属性，跨加载保留，不重放——macOS 还曾因加载后全量
-            // 重发设置干扰输入（v1.2.3 教训）。
+            // 自身属性，跨加载保留，不重放。
             if (Platform.isWindows) await _applyPageZoom();
-            // 新文档会清掉注入的拖拽层，平移模式开着的话重新注入。
+            // 新文档会清掉注入的脚本和拖拽层，开着的话重新注入。
+            if (Platform.isMacOS && pinchZoom.value) {
+              await _injectPinchListener(controller);
+            }
             if (panMode.value) await _injectPanLayer(controller);
           },
           onProgressChanged: (controller, progress) {
