@@ -68,6 +68,7 @@ class DownloadManager {
   FlutterLocalNotificationsPlugin? _notif;
   int _lastNotifiedPercent = -1;
   DateTime _lastNotifiedAt = DateTime.fromMillisecondsSinceEpoch(0);
+  int _retryTextAt = 0;
 
   /// 用户主动取消过的包名（重启后启动检查不再自动续传）。
   static const _cancelPrefKey = 'update_download_user_cancelled_asset';
@@ -315,12 +316,22 @@ class DownloadManager {
         (r, t) {
           receivedBytes.value = r;
           totalBytes.value = t > 0 ? t : 1;
+          // 重试提示只在网络恢复推进 2MB 后自动消失，期间保留说明。
+          if (retryText.value.isNotEmpty &&
+              r - _retryTextAt > 2 * 1024 * 1024) {
+            retryText.value = '';
+          }
           _notifyProgress();
         },
         abis: _abis,
         shouldCancel: () => _cancelFlag,
         onRetry: (attempt) {
+          _retryTextAt = receivedBytes.value;
           retryText.value = '网络中断，断点续传中（第 $attempt 次）…';
+        },
+        onRestart: () {
+          _retryTextAt = receivedBytes.value;
+          retryText.value = '下载源校验不一致，正在从头重新下载…';
         },
       );
       if (path == null) {
@@ -476,7 +487,9 @@ class DownloadManager {
     final plugin = _notif;
     if (plugin == null) return;
     final total = totalBytes.value;
-    final pct = total > 0 ? receivedBytes.value * 100 ~/ total : 0;
+    // 总大小未知（探测失败兜底）时不能用假百分比——那会瞬间"走满"。
+    final sizeKnown = total > 1;
+    final pct = sizeKnown ? receivedBytes.value * 100 ~/ total : 0;
     final now = DateTime.now();
     if (pct == _lastNotifiedPercent &&
         now.difference(_lastNotifiedAt).inMilliseconds < 1500) {
@@ -488,8 +501,11 @@ class DownloadManager {
       plugin.show(
         id: _progressNotifId,
         title: '正在下载 v${release?.version ?? ''}',
-        body: '${(receivedBytes.value / 1048576).toStringAsFixed(1)} / '
-            '${(total / 1048576).toStringAsFixed(1)} MB（$pct%）',
+        body: sizeKnown
+            ? '${(receivedBytes.value / 1048576).toStringAsFixed(1)} / '
+                  '${(total / 1048576).toStringAsFixed(1)} MB（$pct%）'
+            : '大小未知，已下载 '
+                  '${(receivedBytes.value / 1048576).toStringAsFixed(1)} MB',
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             'update_progress',
@@ -503,8 +519,9 @@ class DownloadManager {
             silent: true,
             autoCancel: false,
             showProgress: true,
-            maxProgress: 100,
-            progress: pct,
+            // maxProgress 0 + progress 0 = 系统的不定态进度条。
+            maxProgress: sizeKnown ? 100 : 0,
+            progress: sizeKnown ? pct : 0,
           ),
         ),
       );

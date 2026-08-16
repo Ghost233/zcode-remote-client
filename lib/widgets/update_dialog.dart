@@ -183,18 +183,36 @@ class _ApkDownloadDialogState extends State<_ApkDownloadDialog> {
               builder: (context, _) {
                 final received = dm.receivedBytes.value;
                 final total = dm.totalBytes.value;
-                final progress =
-                    total > 0 ? (received / total).clamp(0.0, 1.0) : 0.0;
+                // 三态：连接中（还没拿到文件大小）→ 下载中 → 拼装校验
+                // （字节齐了但文件还没拼好，此前用不定态动画冒充"完成"，
+                // 看起来像进度条又跑一遍）。总大小拿不到时如实显示
+                // 「大小未知」，不用假的 0.0/0.0 MB 或瞬间走满糊弄。
+                final sizeKnown = total > 1;
+                final connecting = !sizeKnown && received == 0;
+                final assembling = sizeKnown && received >= total;
+                final progress = sizeKnown
+                    ? (received / total).clamp(0.0, 1.0)
+                    : 0.0;
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     LinearProgressIndicator(
-                      value: progress >= 1 ? null : progress,
+                      // 下载中显示真实比例；连接中/大小未知才用流动动画。
+                      value: connecting || !sizeKnown ? null : progress,
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(3),
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      '${(received / 1048576).toStringAsFixed(1)} / '
-                      '${(total / 1048576).toStringAsFixed(1)} MB',
+                      connecting
+                          ? '正在连接下载服务器…'
+                          : assembling
+                          ? '下载完成，正在校验与拼装…'
+                          : sizeKnown
+                          ? '${(received / 1048576).toStringAsFixed(1)} / '
+                                '${(total / 1048576).toStringAsFixed(1)} MB'
+                          : '文件大小未知，已下载 '
+                                '${(received / 1048576).toStringAsFixed(1)} MB',
                       style: const TextStyle(fontSize: 12),
                     ),
                     if (dm.retryText.value.isNotEmpty) ...[

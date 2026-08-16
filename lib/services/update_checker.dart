@@ -177,6 +177,7 @@ class UpdateChecker {
     List<String> abis = const [],
     bool Function()? shouldCancel,
     void Function(int attempt)? onRetry,
+    void Function()? onRestart,
   }) async {
     final asset = release.androidApkFor(abis);
     if (asset == null) return null;
@@ -256,7 +257,11 @@ class UpdateChecker {
             ),
         ]);
       } catch (_) {
-        if (session.remoteChanged && round == 0) continue;
+        // 远端文件变了：清断点整体重下（进度会归零重来，得让上层提示）。
+        if (session.remoteChanged && round == 0) {
+          onRestart?.call();
+          continue;
+        }
         if (session.cancelled) throw const UpdateDownloadCancelled();
         return null; // 有分段重试耗尽或探测到的永久性失败
       }
@@ -271,6 +276,8 @@ class UpdateChecker {
       }
       if (!ok) {
         if (round == 0) {
+          // 分段校验不过：清断点重下，同样要提示进度归零。
+          onRestart?.call();
           await _cleanParts(downloadDir, asset.name);
           continue;
         }
