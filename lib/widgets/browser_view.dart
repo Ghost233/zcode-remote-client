@@ -82,6 +82,10 @@ const String kDesktopViewportScript = '''
 ///   在 compositionend 之前已到达）。
 /// - 事件环形日志 window.__zcodeImeLog（60 条），排查输入法问题时可从
 ///   控制台或 evaluateJavascript 读取。
+/// - WebKit 专属自愈：发送一条消息后打不进字（打一个字像被删一个字）。
+///   根因是页面发送后程序化清空仍持有焦点的编辑框，WKWebView 的文本
+///   输入会话（含上次组合输入的标记文本状态）残留失效；检测到"真实
+///   回车放行后编辑框被清空"即 blur+focus 强制重建输入会话。
 String imeEnterGuardScript({required bool webkit}) => '''
 (function() {
   if (window.__zcodeImeGuard) return;
@@ -143,6 +147,37 @@ String imeEnterGuardScript({required bool webkit}) => '''
   window.addEventListener('keydown', guard, true);
   window.addEventListener('keypress', guard, true);
   window.addEventListener('keyup', guard, true);
+  if (IS_WEBKIT) {
+    // 发送后输入会话自愈（仅 macOS）。注册在 guard 之后：guard 吞掉的
+    // 幽灵回车（stopImmediatePropagation）不会到达这里，这里看到的
+    // 只会是用户真实的回车。真实回车后若编辑框随后被页面清空（= 一条
+    // 消息发送成功），blur+focus 强制 WebKit 丢弃失效的输入会话重建，
+    // 否则下一条消息会"打一个字被删一个字"或完全打不进。
+    window.addEventListener('keydown', function(e) {
+      if (e.key !== 'Enter' && e.keyCode !== 13) return;
+      var el = document.activeElement;
+      if (!el) return;
+      var editable = el.isContentEditable ||
+          /^(INPUT|TEXTAREA)$/.test(el.tagName || '');
+      if (!editable) return;
+      var checks = 0;
+      var timer = setInterval(function() {
+        checks++;
+        var stillFocused = document.activeElement === el;
+        var empty = stillFocused && (el.isContentEditable
+            ? (el.textContent || '').trim() === ''
+            : !el.value);
+        if (empty) {
+          clearInterval(timer);
+          el.blur();
+          el.focus();
+          rec({type: 'postSendRefocus'});
+        } else if (checks >= 6 || !stillFocused) {
+          clearInterval(timer);
+        }
+      }, 100);
+    }, true);
+  }
 })();
 ''';
 
