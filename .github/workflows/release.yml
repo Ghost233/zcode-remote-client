@@ -308,6 +308,5 @@ jobs:
             zcode-remote-client-android-armeabi-v7a-*.apk \
             zcode-remote-client-android-x86_64-*.apk \
             zcode-remote-client-macos-arm64-*.dmg \
-            zcode-remote-client-macos-x86_64-*.dmg \
             zcode-remote-client-windows-x64-*.zip
           # arm64 APK 必须第一个上传（旧版本应用内更新器固定取第一个 .apk）
