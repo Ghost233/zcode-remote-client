@@ -617,15 +617,10 @@ class BrowserViewState extends State<BrowserView>
             }
             return true;
           },
-          onDownloadStarting: (controller, request) async {
+          onDownloadStartRequest: (controller, request) async {
             // 下载交给系统浏览器/下载器处理。
             await launchUrl(request.url, mode: LaunchMode.externalApplication);
             _toast('已交给系统浏览器下载');
-            // Windows 上取消 WebView2 自带的下载 UI（已外抛系统浏览器）。
-            return DownloadStartResponse(
-              handled: true,
-              action: DownloadStartResponseAction.CANCEL,
-            );
           },
           shouldOverrideUrlLoading: (controller, action) async {
             final uri = action.request.url;

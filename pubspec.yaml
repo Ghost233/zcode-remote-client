@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # 版本号只写 X.Y.Z；发版时末位 +1，里程表进位：某一位超过 9 归 0 并向
 # 前一位进 1（如 1.2.9 → 1.3.0、1.9.9 → 2.0.0）。
 # build 号不手写，由 CI 用 --build-number 注入（提交数+1000），见 .github/workflows/release.yml
-version: 1.3.3
+version: 1.3.4
 
 environment:
   sdk: ^3.12.2
@@ -44,7 +44,7 @@ dependencies:
   # 6.2.0-beta.3 修"完全无法输入"，事后看是误诊——那批版本的输入问题
   # 出在别处，且 beta 线的焦点修复（#2380 workaround）反而引入了输入
   # 会话问题。回到 6.1.5。
-  flutter_inappwebview: ^6.1.5
+  flutter_inappwebview: 6.1.5
   url_launcher: ^6.3.0
   share_plus: ^10.0.2
   package_info_plus: ^8.0.0
