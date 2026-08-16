@@ -102,11 +102,17 @@ ln -sfn A "${FW_DST}/Versions/Current"
 ln -sfn "Versions/Current/Chromium Embedded Framework" "${FW_DST}/Chromium Embedded Framework"
 ln -sfn Versions/Current/Libraries "${FW_DST}/Libraries"
 ln -sfn Versions/Current/Resources "${FW_DST}/Resources"
-# 本仓库补丁：链接期别名。框架名带空格，CocoaPods 写进 xcconfig 的
-# -framework 参数无论怎么引号都会被 Xcode 26 的 xcconfig 分词器拆散；
-# 无空格别名让链接器经由 FRAMEWORK_SEARCH_PATHS 找到同一份框架
-#（运行时嵌入与 dyld 加载仍用原始名，安装名不受影响）。
-ln -sfn "Chromium Embedded Framework.framework" "${DEST}/CEF.framework"
+# 本仓库补丁：链接期别名（无空格）。框架名带空格，CocoaPods 写进
+# xcconfig 的 -framework 参数无论怎么引号都会被 Xcode 26 的分词器拆散。
+# 别名必须是真目录、且内部二进制名与框架名一致——ld 只认
+# <名>.framework/<名>，不读 Info.plist 的 CFBundleExecutable（本地
+# clang 最小复现实测）；二进制用符号链接指回真实文件。运行时嵌入与
+# dyld 加载仍用原始名，安装名不受影响。
+CEF_ALIAS="${DEST}/CEF.framework"
+rm -rf "${CEF_ALIAS}"
+mkdir -p "${CEF_ALIAS}/Resources"
+ln -sfn "../Chromium Embedded Framework.framework/Versions/A/Chromium Embedded Framework" "${CEF_ALIAS}/CEF"
+printf '<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>CEF</string></dict></plist>' > "${CEF_ALIAS}/Resources/Info.plist"
 
 # Build the standalone CEF helper executable used by the multi-process helper
 # bundles (embed_cef_helpers.sh clones this into the 5 named .app bundles).
