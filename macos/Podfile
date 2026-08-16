@@ -68,22 +68,19 @@ end
 
 post_integrate do |installer|
   # webview_cef 的 CEF 框架名带空格："Chromium Embedded Framework"。
-  # CocoaPods 写进 Pods-Runner xcconfig 的 -framework 参数在新版
-  # Xcode 的 xcconfig 分词下会被拆成多个词，clang 收到裸的
-  # 'Embedded' 'Framework' 文件参数而失败（上游 issue #27/#178）。
-  # xcconfig 落盘后统一改写成转义引号形式，任一分词行为下都安全。
+  # CocoaPods 1.17 写出的 -framework 参数是拆散的形态，Xcode 26 的
+  # xcconfig 分词器无论裸词、引号还是转义引号都保不住多词参数（上游
+  # issue #27/#178）。统一改写到无空格别名 CEF（download_cef.sh 生成
+  # 的符号链接，指向同一份框架），链接参数从此不含空格。
   fixes = [
-    # CocoaPods 1.17 实际生成的损坏形态（CI 日志实测）：
+    # CocoaPods 原始损坏形态（CI 日志实测）：
     #   -ObjC Embedded Framework -framework "Chromium"
-    ['-ObjC Embedded Framework -framework "Chromium"',
-     '-ObjC -framework \\"Chromium Embedded Framework\\"'],
-    # 其余历史/变体形态兜底。
-    [/-framework\s+"Chromium Embedded Framework"/,
-     '-framework \\"Chromium Embedded Framework\\"'],
-    [/-framework\s+Chromium\\ Embedded\\ Framework/,
-     '-framework \\"Chromium Embedded Framework\\"'],
-    [/-framework\s+Chromium Embedded Framework/,
-     '-framework \\"Chromium Embedded Framework\\"'],
+    ['-ObjC Embedded Framework -framework "Chromium"', '-ObjC -framework CEF'],
+    # 转义引号形态（本仓库早期补丁的产物，防残留）。
+    [/-framework\s+\\"Chromium Embedded Framework\\"/, '-framework CEF'],
+    # 常规引号与裸词形态兜底。
+    [/-framework\s+"Chromium Embedded Framework"/, '-framework CEF'],
+    [/-framework\s+Chromium Embedded Framework/, '-framework CEF'],
   ]
   Dir.glob(File.join(__dir__, 'Pods/Target Support Files/**/*.xcconfig')).each do |f|
     txt = File.read(f)

@@ -102,6 +102,11 @@ ln -sfn A "${FW_DST}/Versions/Current"
 ln -sfn "Versions/Current/Chromium Embedded Framework" "${FW_DST}/Chromium Embedded Framework"
 ln -sfn Versions/Current/Libraries "${FW_DST}/Libraries"
 ln -sfn Versions/Current/Resources "${FW_DST}/Resources"
+# 本仓库补丁：链接期别名。框架名带空格，CocoaPods 写进 xcconfig 的
+# -framework 参数无论怎么引号都会被 Xcode 26 的 xcconfig 分词器拆散；
+# 无空格别名让链接器经由 FRAMEWORK_SEARCH_PATHS 找到同一份框架
+#（运行时嵌入与 dyld 加载仍用原始名，安装名不受影响）。
+ln -sfn "Chromium Embedded Framework.framework" "${DEST}/CEF.framework"
 
 # Build the standalone CEF helper executable used by the multi-process helper
 # bundles (embed_cef_helpers.sh clones this into the 5 named .app bundles).
