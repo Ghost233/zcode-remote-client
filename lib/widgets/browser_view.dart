@@ -64,49 +64,6 @@ const String kDesktopViewportScript = '''
 /// 记录反馈）：macOS 上组词途中按回车可能被页面误当成普通回车执行
 /// 命令（WebKit Bug 165004）。
 
-/// 输入法组合态回车保护（v1.1.3 同款，最小实现）。
-///
-/// 中文等输入法组词过程中按回车：Chromium（Edge/Chrome）给页面的
-/// keydown 是 keyCode=229 且会消费掉提交组合的那次回车，页面收不到；
-/// 而 WKWebView（本 app 的 macOS/iOS 内核）会派发 keyCode=13 的正常
-/// 回车，页面按 Chromium 惯例写的防御（只认 229）就失效了——组词途中
-/// 一按回车整句被"发送"出去。
-///
-/// 处理：文档开始即在 window 捕获阶段拦截组合态的 Enter（keydown/
-/// keypress/keyup），不让页面监听器收到；不 preventDefault——组合的
-/// 提交由输入法在原生层完成（macOS 拼音：回车落选上屏原始字母），
-/// 行为与 Edge 对齐。候选窗内按回车选词不会到达页面，不受影响。
-///
-/// 注意：刻意保持最小——只动组合态的回车事件，不吞键、不打日志、
-/// 不做任何"发送后补救"。v1.1.9~v1.2.6 期间在此之上叠加的吞键窗口、
-/// 会话自愈等机制全部撤除（都出了各式新问题，v1.1.1 实测裸栈 +
-/// 本防护即够用）。
-const String kImeEnterGuardScript = '''
-(function() {
-  if (window.__zcodeImeGuard) return;
-  window.__zcodeImeGuard = true;
-  var composing = false;
-  window.addEventListener('compositionstart', function() {
-    composing = true;
-  }, true);
-  window.addEventListener('compositionend', function() {
-    // compositionend 与触发它的 keydown 的先后顺序各引擎不同，
-    // 延一拍再放行，保证"提交组合的那次回车"仍被拦截。
-    setTimeout(function() { composing = false; }, 0);
-  }, true);
-  function guard(e) {
-    if (e.key !== 'Enter' && e.keyCode !== 13) return;
-    if (e.isComposing || composing) {
-      e.stopImmediatePropagation();
-      e.stopPropagation();
-    }
-  }
-  window.addEventListener('keydown', guard, true);
-  window.addEventListener('keypress', guard, true);
-  window.addEventListener('keyup', guard, true);
-})();
-''';
-
 /// Android：把 WebView 原生（双指）缩放复位到 100%。
 ///
 /// 双指缩放由 WebView 原生处理，不经应用内的缩放通知器（「页面缩放」
@@ -540,19 +497,15 @@ class BrowserViewState extends State<BrowserView>
                 ? UserPreferredContentMode.DESKTOP
                 : UserPreferredContentMode.RECOMMENDED,
           ),
-          // 常驻：输入法组合态回车保护（唯一保留的注入脚本）；
-          // 桌面模式追加视口脚本。
-          initialUserScripts: UnmodifiableListView([
-            UserScript(
-              source: kImeEnterGuardScript,
-              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-            ),
-            if (desktopMode)
-              UserScript(
-                source: kDesktopViewportScript,
-                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-              ),
-          ]),
+          // 零常驻脚本（与 v1.1.1 完全一致）；桌面模式才注入视口脚本。
+          initialUserScripts: desktopMode
+              ? UnmodifiableListView([
+                  UserScript(
+                    source: kDesktopViewportScript,
+                    injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                  ),
+                ])
+              : null,
           pullToRefreshController: _pullToRefresh,
           contextMenu: ContextMenu(
             settings: ContextMenuSettings(
