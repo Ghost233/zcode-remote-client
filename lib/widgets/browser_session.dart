@@ -2,9 +2,9 @@ import 'package:flutter/widgets.dart';
 
 /// 浏览器会话视图的公共接口。
 ///
-/// 两份实现：BrowserView（iOS/Android/Windows，flutter_inappwebview）
-/// 与 CefBrowserView（macOS，webview_cef/Chromium）。悬浮工具栏和首页
-/// 通过 [sessionOf] 使用，不关心底层 WebView 是哪家。
+/// 当前唯一实现：BrowserView（flutter_inappwebview，全平台）。悬浮工具栏
+/// 和首页通过 [sessionOf] 使用这个接口而非具体类型，将来若再换承载
+/// （如 macOS 曾短暂用过的 CEF）不必改动调用方。
 abstract class BrowserSession {
   /// 平移（抓手）模式开关。
   ValueNotifier<bool> get panMode;

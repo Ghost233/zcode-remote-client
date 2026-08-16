@@ -10,7 +10,6 @@ import '../services/device_store.dart';
 import '../services/keep_alive.dart';
 import '../widgets/browser_session.dart';
 import '../widgets/browser_view.dart';
-import '../widgets/cef_browser_view.dart';
 import '../widgets/device_edit_sheet.dart';
 import '../widgets/device_switcher_sheet.dart';
 import '../widgets/floating_dock.dart';
@@ -297,24 +296,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       });
       return const SizedBox.shrink();
-    }
-    // macOS 用 CEF（Chromium）承载：Flutter 平台视图层会破坏内嵌
-    // WKWebView 的中文输入法组合，CEF 自带原生 IME 管线。其余平台
-    // 继续用 flutter_inappwebview。
-    if (Platform.isMacOS) {
-      return CefBrowserView(
-        key: _viewKeys[id],
-        device: device,
-        pageZoom: _pageZooms[id]!,
-        onSessionReady: () {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) setState(() {});
-          });
-        },
-        onTitleChanged: (title) =>
-            context.read<DeviceStore>().maybeFillRemarkFromTitle(id, title),
-        onReplaceAddress: () => DeviceEditSheet.show(context, editing: device),
-      );
     }
     return BrowserView(
       key: _viewKeys[id],

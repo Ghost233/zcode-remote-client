@@ -1,8 +1,8 @@
 library;
 
-/// 注入页面的共享 JS 脚本（BrowserView 与 CefBrowserView 共用，避免两份实现漂移）。
+/// 注入页面的共享 JS 脚本（BrowserView 与未来的其他实现共用，避免漂移）。
 
-/// 根节点 CSS 整页缩放。桌面 Chromium（WebView2 / CEF）下重排正确，
+/// 根节点 CSS 整页缩放。桌面 Chromium（WebView2）下重排正确，
 /// 与浏览器 Ctrl +/- 等效；z 为 1 时清除样式。
 String kPageZoomScript(double z) => '''
 (function() {

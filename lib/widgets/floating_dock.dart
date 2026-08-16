@@ -35,8 +35,8 @@ class FloatingDock extends StatefulWidget {
   /// 当前页的 WebView 控制器（无打开会话时为 null）。
   final InAppWebViewController? controller;
 
-  /// 当前浏览器会话视图的 key（BrowserView 或 macOS 的 CefBrowserView），
-  /// currentState 实现 BrowserSession 接口，供导航/页面操作调用。
+  /// 当前浏览器会话视图的 key，currentState 实现 BrowserSession 接口，
+  /// 供导航/页面操作调用。
   final GlobalKey? viewKey;
 
   /// 页面缩放（浏览器 Ctrl +/- 式整页缩放，布局重排）。
@@ -193,9 +193,7 @@ class _FloatingDockState extends State<FloatingDock> {
                   item(Icons.edit_note, '替换此设备地址', widget.onReplaceAddress),
                   const Divider(height: 6, indent: 16, endIndent: 16),
                   sectionLabel('偏好'),
-                  // 桌面版网站：切换 UA，重建当前会话生效。macOS 的 CEF
-                  // 本就是桌面 Chromium（天然桌面布局），不需要该开关。
-                  if (!Platform.isMacOS)
+                  // 桌面版网站：切换 UA，重建当前会话生效。
                   Consumer<DeviceStore>(
                     builder: (ctx, store, _) => SwitchListTile(
                       contentPadding: const EdgeInsets.symmetric(

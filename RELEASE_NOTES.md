@@ -1,3 +1,8 @@
+## v1.3.2
+
+- **macOS 撤回 CEF（Chromium）方案，回到最裸的内嵌 WKWebView**（v1.2.8 同款状态）：CEF 下无法向页面拖拽文件、复制粘贴也不可用，得不偿失。macOS 包恢复 universal 双架构（arm64 + x86_64）同时发版，体积回到约 14MB；中文输入法问题回到已知状态（Flutter 嵌入层缺陷），应急方案不变：点输入框外再点回恢复，或用工具栏的「在系统浏览器打开」
+- Android/Windows 不受本次撤回影响（从未用过 CEF）
+
 ## v1.3.1
 
 - CEF 用户数据目录按应用隔离（此前用 CEF 全局默认目录 ~/Library/Application Support/CEF，与其他 CEF 应用同机运行会互相干扰），沙盒与非沙盒运行均落到本应用专属目录

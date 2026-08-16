@@ -20,7 +20,6 @@ on:
       - 'pubspec.yaml'
       - 'RELEASE_NOTES.md'
       - 'lib/**'
-      - 'packages/**'
       - 'android/**'
       - 'macos/**'
       - 'windows/**'
@@ -137,15 +136,9 @@ jobs:
           path: dist/
 
   macos:
-    name: macOS DMG（${{ matrix.arch }}）
+    name: macOS 双架构 DMG
     needs: prepare
     if: needs.prepare.outputs.run-builds == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        # 双架构各自构建：CEF 按架构发行，arm64 机器上可交叉产出 x86_64
-        #（CEF_TARGET_ARCH 环境变量控制脚本与 podspec 的架构选择）。
-        arch: [arm64, x86_64]
     # 钉住 macos-26 镜像 + Xcode 26.3：flutter_inappwebview_macos 1.2.0-beta.3
     # 的 WebAuthenticationSession.swift 类声明未加 @available 门控就遵从
     # ASWebAuthenticationPresentationContextProviding（实现方法却标注 10.15），
@@ -157,11 +150,6 @@ jobs:
       BUILD_NAME: ${{ needs.prepare.outputs.version }}
       BUILD_NUMBER: ${{ needs.prepare.outputs.build-number }}
       BUILD_HASH: ${{ needs.prepare.outputs.hash6 }}
-      # webview_cef 的 wrapper 默认编 Debug；release 应用必须配 Release 版
-      # wrapper（DCHECK 改 ABI），flutter build 内部的 pod install 读此变量。
-      CEF_WRAPPER_BUILD_TYPE: Release
-      # 交叉构建目标架构（脚本与 podspec 都按它选 CEF 发行版/剔除切片）。
-      CEF_TARGET_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v7
 
@@ -171,22 +159,7 @@ jobs:
           channel: stable
           cache: true
 
-      # webview_cef：pod install 的 prepare_command 用 cmake/ninja 编译 CEF
-      # wrapper，首次还会下载约 330MB 的 CEF 标准发行版（构建时间增加）。
-      - run: brew install cmake ninja
-
       - run: flutter pub get
-
-      # 先单独 pod install（flutter build 内部会复用），并打印生成的
-      # Pods-Runner xcconfig——webview_cef 框架名带空格，链接参数的分词
-      # 问题定位依赖这份内容（上游 issue #27/#178）。
-      - name: pod install（含 xcconfig 诊断输出）
-        run: |
-          cd macos && pod install
-          echo "===== Pods-Runner.release.xcconfig ====="
-          cat "Pods/Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig" || true
-          echo "===== webview_cef.release.xcconfig ====="
-          cat "Pods/Target Support Files/webview_cef/webview_cef.release.xcconfig" || true
 
       - run: >-
           flutter build macos --release --obfuscate
@@ -194,24 +167,33 @@ jobs:
           --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
           --dart-define=BUILD_HASH="$BUILD_HASH"
 
-      # 单架构产物（podspec 已按 CEF_TARGET_ARCH 剔除另一架构切片），
-      # 直接打 DMG；两个矩阵任务各出一份。
-      - name: 打 DMG（${{ matrix.arch }} 单架构）
+      # Flutter 产物是 universal：分别剥出 arm64 / x86_64，重签名后各打 DMG
+      #（含拖拽安装的 Applications 符号链接）。
+      - name: 剥架构 + 打 DMG
         run: |
           mkdir -p dist
-          APP="build/macos/Build/Products/Release/ZCode远程客户端.app"
-          codesign --force --deep --sign - "$APP"
-          DMGROOT="$RUNNER_TEMP/dmgroot"
-          rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
-          cp -R "$APP" "$DMGROOT/"
-          ln -s /Applications "$DMGROOT/Applications"
-          hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
-            -format UDZO -ov "dist/zcode-remote-client-macos-${{ matrix.arch }}-v$BUILD_NAME-$BUILD_HASH.dmg" > /dev/null
+          for ARCH in arm64 x86_64; do
+            # 临时副本必须保持最终应用名：DMG 里看到的就是这个文件名。
+            rm -rf "$RUNNER_TEMP/app-$ARCH"; mkdir -p "$RUNNER_TEMP/app-$ARCH"
+            DST="$RUNNER_TEMP/app-$ARCH/ZCode远程客户端.app"
+            cp -R build/macos/Build/Products/Release/ZCode远程客户端.app "$DST"
+            find "$DST" -type f \( -name 'ZCode远程客户端' -o -name 'App' -o -name 'FlutterMacOS' \) |
+              while read f; do
+                lipo -thin $ARCH -output /tmp/_thin "$f" 2>/dev/null && mv /tmp/_thin "$f"
+              done
+            codesign --force --deep --sign - "$DST"
+            DMGROOT="$RUNNER_TEMP/dmgroot-$ARCH"
+            rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
+            cp -R "$DST" "$DMGROOT/"
+            ln -s /Applications "$DMGROOT/Applications"
+            hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
+              -format UDZO -ov "dist/zcode-remote-client-macos-$ARCH-v$BUILD_NAME-$BUILD_HASH.dmg" > /dev/null
+          done
           ls -lh dist/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: macos-dmgs-${{ matrix.arch }}
+          name: macos-dmgs
           path: dist/
 
   windows:

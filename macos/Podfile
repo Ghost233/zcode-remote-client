@@ -1,4 +1,4 @@
-platform :osx, '12.0'
+platform :osx, '10.15'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -38,54 +38,5 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_macos_build_settings(target)
-  end
-  # webview_cef（macOS 的 CEF/Chromium WebView）：嵌入 CEF helper 子进程
-  # app（多进程渲染）。不加则退回 Chromium 不支持的单进程模式。
-  require File.expand_path(
-    'Flutter/ephemeral/.symlinks/plugins/webview_cef/macos/embed_cef_helpers.rb', __dir__)
-  WebviewCEF.install_helper_phase(installer)
-
-  # webview_cef 的 pod 源码编译必须与所链接的 CEF 二进制同风味：Release/
-  # Profile 用 Release 版 CEF（不导出 DCHECK 分支符号，见
-  # cef_ref_counted.h 的 ~RefCountedThreadSafeBase），需要 NDEBUG 关闭
-  # DCHECK_IS_ON()，否则符号未定义、链接失败。生成的 Pods 工程默认不带
-  # NDEBUG，这里按构建配置补上（不要写进 podspec 的 xcconfig——带空格的
-  # 框架路径会被 CocoaPods 的 xcconfig 序列化弄坏）。
-  installer.pods_project.targets
-      .select { |t| t.name == 'webview_cef' }
-      .each do |t|
-    t.build_configurations.each do |c|
-      next unless %w[Release Profile].include?(c.name)
-      defs = c.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
-      defs = [defs] if defs.is_a?(String)
-      unless defs.include?('NDEBUG=1')
-        defs << 'NDEBUG=1'
-        c.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
-      end
-    end
-  end
-end
-
-post_integrate do |installer|
-  # webview_cef 的 CEF 框架名带空格："Chromium Embedded Framework"。
-  # CocoaPods 1.17 写出的 -framework 参数是拆散的形态，Xcode 26 的
-  # xcconfig 分词器无论裸词、引号还是转义引号都保不住多词参数（上游
-  # issue #27/#178）。统一改写到无空格别名 CEF（download_cef.sh 生成
-  # 的符号链接，指向同一份框架），链接参数从此不含空格。
-  fixes = [
-    # CocoaPods 原始损坏形态（CI 日志实测）：
-    #   -ObjC Embedded Framework -framework "Chromium"
-    ['-ObjC Embedded Framework -framework "Chromium"', '-ObjC -framework CEF'],
-    # 转义引号形态（本仓库早期补丁的产物，防残留）。
-    [/-framework\s+\\"Chromium Embedded Framework\\"/, '-framework CEF'],
-    # 常规引号与裸词形态兜底。
-    [/-framework\s+"Chromium Embedded Framework"/, '-framework CEF'],
-    [/-framework\s+Chromium Embedded Framework/, '-framework CEF'],
-  ]
-  Dir.glob(File.join(__dir__, 'Pods/Target Support Files/**/*.xcconfig')).each do |f|
-    txt = File.read(f)
-    fixed = txt
-    fixes.each { |pat, rep| fixed = fixed.gsub(pat, rep) }
-    File.write(f, fixed) if fixed != txt
   end
 end
