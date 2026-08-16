@@ -157,8 +157,10 @@ String imeEnterGuardScript({required bool webkit}) => '''
       if (e.key !== 'Enter' && e.keyCode !== 13) return;
       var el = document.activeElement;
       if (!el) return;
+      // 不用正则判断标签：正则行尾锚点符会和 Dart 字符串插值词法冲突。
+      var tag = (el.tagName || '').toUpperCase();
       var editable = el.isContentEditable ||
-          /^(INPUT|TEXTAREA)$/.test(el.tagName || '');
+          tag === 'INPUT' || tag === 'TEXTAREA';
       if (!editable) return;
       var checks = 0;
       var timer = setInterval(function() {
