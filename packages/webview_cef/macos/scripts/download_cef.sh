@@ -107,19 +107,22 @@ ln -sfn Versions/Current/Resources "${FW_DST}/Resources"
 # bundles (embed_cef_helpers.sh clones this into the 5 named .app bundles).
 # It links the wrapper statically; the framework is dlopen'd at runtime
 # (LoadInHelper), so it does not link the framework here.
-#
-# 本仓库补丁：helper 的 main() 第一行 LoadInHelper() dlopen 框架，之后才会
-# 用到 Chromium base 的符号（如 RefCountedThreadSafeBase 析构）。链接期不
-# 指定框架就必须允许未定义符号延迟到运行时解析——上游默认工具链恰好不
-# 报错，而 Xcode 26.3 的 clang 会把内联析构链的引用落进目标文件导致链接
-# 失败。dynamic_lookup 正是"运行时 dlopen"设计的标准搭配。
+
+# 本仓库补丁：consumer 侧的编译配置必须与 CEF 二进制同风味——Release 版
+# CEF 框架不导出 DCHECK 分支里的符号（cef_ref_counted.h 的
+# ~RefCountedThreadSafeBase 在 DCHECK_IS_ON() 时是跨编译单元的，只有 CEF
+# Debug 二进制提供）。helper 编译不带 -DNDEBUG 时会发出这些未定义引用，
+# Xcode 26 链接器直接报错（旧链接器对 dylib 宽容，掩盖过问题）。
+HELPER_DEFS=""
+if [ "${BUILD_TYPE}" = "Release" ]; then HELPER_DEFS="-DNDEBUG"; fi
 echo "==> Building CEF helper executable"
 clang++ -std=c++20 -stdlib=libc++ -mmacosx-version-min=12.0 -w \
+  ${HELPER_DEFS} \
   -I "${DEST}" -I "${REPO_ROOT}/common" \
   "${MACOS_DIR}/helper/cef_helper_main.mm" \
   "${DEST}/libcef_dll_wrapper.a" \
   -framework Foundation -framework AppKit \
-  -Wl,-ObjC -Wl,-undefined,dynamic_lookup \
+  -Wl,-ObjC \
   -o "${DEST}/cef_helper"
 [ -f "${DEST}/cef_helper" ] || err "cef_helper was not produced"
 
