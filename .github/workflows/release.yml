@@ -181,7 +181,12 @@ jobs:
               while read f; do
                 lipo -thin $ARCH -output /tmp/_thin "$f" 2>/dev/null && mv /tmp/_thin "$f"
               done
-            codesign --force --deep --sign - "$DST"
+            # 重签名必须带 entitlements：lipo 剥架构后原签名失效需重签，
+            # 但 --deep 裸签会把沙盒授权丢掉——WKWebView 无沙盒运行时中文
+            # 输入法会话被破坏（首字打不进；实测 A/B 于两台 Mac 定案），
+            # v1.1.9~v1.3.5 的输入问题全部源于此。
+            codesign --force --deep --sign - \
+              --entitlements macos/Runner/Release.entitlements "$DST"
             DMGROOT="$RUNNER_TEMP/dmgroot-$ARCH"
             rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
             cp -R "$DST" "$DMGROOT/"
