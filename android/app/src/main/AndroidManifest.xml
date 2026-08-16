@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <!-- Android 13+ 更新下载进度/结果通知 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- 后台保活前台服务（退后台挂常驻通知，保持 ZCode 会话连接） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <application
         android:label="ZCode远程客户端"
         android:name="${applicationName}"
@@ -32,6 +35,15 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- 后台保活：specialUse 类型（Android 14+ 要求带类型与子类型说明） -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the remote terminal WebSocket alive while the app is in the background"/>
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

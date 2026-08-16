@@ -1,0 +1,33 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/services.dart';
+
+/// Android 后台保活：退后台时挂前台服务（常驻通知），回前台撤掉。
+///
+/// 没有它，应用退后台后系统会冻结网络（Doze）/可能回收进程，ZCode 页面
+/// 的 WebSocket 断开，回到前台页面就整页刷新重连。前台服务让进程和网络
+/// 在后台不受限。iOS 系统不允许第三方后台保活，此封装为空操作。
+class BackgroundKeepAlive {
+  BackgroundKeepAlive._();
+
+  static const _channel = MethodChannel('app/keep_alive');
+  static bool _running = false;
+
+  static Future<void> start() async {
+    if (!Platform.isAndroid || _running) return;
+    try {
+      await _channel.invokeMethod<void>('start');
+      _running = true;
+    } catch (_) {
+      _running = false;
+    }
+  }
+
+  static Future<void> stop() async {
+    if (!Platform.isAndroid || !_running) return;
+    _running = false;
+    try {
+      await _channel.invokeMethod<void>('stop');
+    } catch (_) {}
+  }
+}

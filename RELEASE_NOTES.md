@@ -1,3 +1,7 @@
+## v1.3.0
+
+- 新增 Android「后台保活」（默认开启，悬浮球-更多-偏好里可关）：应用退到后台时挂一条前台服务常驻通知，进程和网络不受系统后台限制，ZCode 会话的 WebSocket 不断开——回到应用不再整页刷新重连。iOS 系统不允许第三方后台保活，无法实现同类功能；桌面端不受影响
+
 ## v1.2.9
 
 - **macOS 内核更换：网页承载从内嵌 WKWebView 换成 CEF（Chromium）**，根治中文输入法问题——此前 Flutter 平台视图层会破坏 WKWebView 的输入法组合态（Safari/Chrome 正常、仅本应用坏），CEF 自带原生输入法管线且不经过平台视图的键盘路由。macOS 包体积从 13MB 增至约 120MB（Chromium 内核固有成本），且仅支持 Apple Silicon（arm64）与 macOS 12.0+（CEF 上游暂无 Intel/universal 构建）；Android/iOS/Windows 完全不受影响（Android 系统 WebView、Windows WebView2 本就是 Chromium）

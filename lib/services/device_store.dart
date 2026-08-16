@@ -15,6 +15,7 @@ class DeviceStore extends ChangeNotifier {
   static const _kPageZoom = 'page_zoom';
   static const _kDesktopMode = 'desktop_mode';
   static const _kPinchZoom = 'pinch_zoom_enabled';
+  static const _kKeepAlive = 'keep_alive_enabled';
 
   List<RemoteDevice> devices = [];
   String? currentId;
@@ -36,6 +37,10 @@ class DeviceStore extends ChangeNotifier {
 
   /// 双指缩放（Android 触屏双指 / macOS 触摸板捏合）开关，默认关闭。
   bool pinchZoomEnabled = false;
+
+  /// 后台保活（Android 前台服务：退后台保持会话连接不刷新），默认开。
+  /// iOS 系统不允许第三方后台保活，此开关只在 Android 生效。
+  bool keepAliveEnabled = true;
 
   RemoteDevice? get current {
     if (currentId == null) return null;
@@ -65,6 +70,7 @@ class DeviceStore extends ChangeNotifier {
     savedPageZoom = prefs.getDouble(_kPageZoom) ?? 1.0;
     desktopMode = prefs.getBool(_kDesktopMode) ?? false;
     pinchZoomEnabled = prefs.getBool(_kPinchZoom) ?? false;
+    keepAliveEnabled = prefs.getBool(_kKeepAlive) ?? true;
     notifyListeners();
   }
 
@@ -199,6 +205,14 @@ class DeviceStore extends ChangeNotifier {
     pinchZoomEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kPinchZoom, enabled);
+  }
+
+  /// 记录后台保活开关。
+  Future<void> setKeepAliveEnabled(bool enabled) async {
+    keepAliveEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kKeepAlive, enabled);
+    notifyListeners();
   }
 
   /// 列表展示名：用户备注 > URL name 参数 > mid 短码 > host。

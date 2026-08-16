@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
+import '../services/keep_alive.dart';
 import '../widgets/browser_session.dart';
 import '../widgets/browser_view.dart';
 import '../widgets/cef_browser_view.dart';
@@ -30,7 +31,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final List<String> _openIds = [];
   final Map<String, InAppWebViewController> _controllers = {};
   final Map<String, ValueNotifier<double>> _pageZooms = {};
@@ -42,7 +43,25 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkUpdatesOnStart();
+  }
+
+  /// 后台保活：退后台挂前台服务保持 ZCode 会话连接（Android、可关），
+  /// 回前台撤掉。避免回来时 WebSocket 已断、页面整页刷新重连。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final store = context.read<DeviceStore>();
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+        if (store.keepAliveEnabled) BackgroundKeepAlive.start();
+      case AppLifecycleState.resumed:
+        BackgroundKeepAlive.stop();
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+        break;
+    }
   }
 
   Future<void> _checkUpdatesOnStart() async {
@@ -55,6 +74,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     for (final z in _pageZooms.values) {
       z.dispose();
     }

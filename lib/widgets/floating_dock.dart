@@ -213,6 +213,22 @@ class _FloatingDockState extends State<FloatingDock> {
                       },
                     ),
                   ),
+                  // 后台保活：退后台挂前台服务保持 ZCode 会话连接不刷新。
+                  // 仅 Android——iOS 系统不允许第三方后台保活。
+                  if (Platform.isAndroid)
+                    Consumer<DeviceStore>(
+                      builder: (ctx, store, _) => SwitchListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                        ),
+                        secondary: const Icon(Icons.all_inclusive_outlined),
+                        title: const Text('后台保活'),
+                        subtitle: const Text('退后台保持会话连接，回来不刷新'),
+                        dense: true,
+                        value: store.keepAliveEnabled,
+                        onChanged: store.setKeepAliveEnabled,
+                      ),
+                    ),
                   const Divider(height: 6, indent: 16, endIndent: 16),
                   sectionLabel('应用'),
                   item(Icons.settings_outlined, '设置', widget.onOpenSettings),
