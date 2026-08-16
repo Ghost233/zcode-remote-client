@@ -16,14 +16,15 @@ name: release
 on:
   push:
     branches: [main]
-    paths:
-      - 'pubspec.yaml'
-      - 'RELEASE_NOTES.md'
-      - 'lib/**'
-      - 'android/**'
-      - 'macos/**'
-      - 'windows/**'
-      - '.github/workflows/release.yml'
+paths:
+  - 'pubspec.yaml'
+  - 'RELEASE_NOTES.md'
+  - 'lib/**'
+  - 'packages/**'
+  - 'android/**'
+  - 'macos/**'
+  - 'windows/**'
+  - '.github/workflows/release.yml'
   workflow_dispatch:
 
 permissions:
