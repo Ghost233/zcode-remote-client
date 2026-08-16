@@ -39,8 +39,10 @@ Flutter webview backed by CEF (Chromium Embedded Framework)
   # `flutter build macos` doesn't try to link a slice the CEF framework/wrapper
   # doesn't provide — that fails with "symbol(s) not found for architecture
   # x86_64". A universal app would require a lipo'd CEF, which is out of scope.
-  host_arch = `uname -m`.strip
-  non_host_arch = (host_arch == 'arm64') ? 'x86_64' : 'arm64'
+  # 本仓库补丁：允许 CEF_TARGET_ARCH 指定交叉目标（默认本机架构），
+  # CI 在 arm64 机器上构建 x86_64 版本时剔除 arm64 切片。
+  target_arch = ENV['CEF_TARGET_ARCH'] || `uname -m`.strip
+  non_host_arch = (target_arch == 'arm64') ? 'x86_64' : 'arm64'
 
   s.platform = :osx, '12.0'
   # CEF 149 public headers require C++20.

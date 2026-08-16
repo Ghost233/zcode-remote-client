@@ -34,10 +34,14 @@ err() { echo "error: $*" >&2; exit 1; }
 CEF_VERSION="$(sed -n 's/^[[:space:]]*set(CEF_VERSION[[:space:]]*"\(.*\)").*/\1/p' "${DOWNLOAD_CMAKE}" | head -1)"
 [ -n "${CEF_VERSION}" ] || err "could not parse CEF_VERSION from ${DOWNLOAD_CMAKE}"
 
-case "$(uname -m)" in
+# 本仓库补丁：CEF_TARGET_ARCH 支持（arm64|x86_64，默认本机）。arm64 CI
+# 上可交叉产出 x86_64 版本——CEF 官方发行版本身分架构提供，wrapper 纯
+# C++ 可交叉编译，无需 Intel 构建机。
+TARGET_ARCH="${CEF_TARGET_ARCH:-$(uname -m)}"
+case "${TARGET_ARCH}" in
   arm64)  CEF_ARCH="macosarm64"; PROJECT_ARCH="arm64" ;;
   x86_64) CEF_ARCH="macosx64";   PROJECT_ARCH="x86_64" ;;
-  *)      err "unsupported arch: $(uname -m)" ;;
+  *)      err "unsupported arch: ${TARGET_ARCH}" ;;
 esac
 
 PKG="cef_binary_${CEF_VERSION}_${CEF_ARCH}"
@@ -126,8 +130,9 @@ printf '<?xml version="1.0"?><plist><dict><key>CFBundleExecutable</key><string>C
 # Xcode 26 链接器直接报错（旧链接器对 dylib 宽容，掩盖过问题）。
 HELPER_DEFS=""
 if [ "${BUILD_TYPE}" = "Release" ]; then HELPER_DEFS="-DNDEBUG"; fi
-echo "==> Building CEF helper executable"
+echo "==> Building CEF helper executable (${PROJECT_ARCH})"
 clang++ -std=c++20 -stdlib=libc++ -mmacosx-version-min=12.0 -w \
+  -arch "${PROJECT_ARCH}" \
   ${HELPER_DEFS} \
   -I "${DEST}" -I "${REPO_ROOT}/common" \
   "${MACOS_DIR}/helper/cef_helper_main.mm" \

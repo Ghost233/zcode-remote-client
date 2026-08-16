@@ -137,9 +137,15 @@ jobs:
           path: dist/
 
   macos:
-    name: macOS DMG（arm64）
+    name: macOS DMG（${{ matrix.arch }}）
     needs: prepare
     if: needs.prepare.outputs.run-builds == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # 双架构各自构建：CEF 按架构发行，arm64 机器上可交叉产出 x86_64
+        #（CEF_TARGET_ARCH 环境变量控制脚本与 podspec 的架构选择）。
+        arch: [arm64, x86_64]
     # 钉住 macos-26 镜像 + Xcode 26.3：flutter_inappwebview_macos 1.2.0-beta.3
     # 的 WebAuthenticationSession.swift 类声明未加 @available 门控就遵从
     # ASWebAuthenticationPresentationContextProviding（实现方法却标注 10.15），
@@ -154,6 +160,8 @@ jobs:
       # webview_cef 的 wrapper 默认编 Debug；release 应用必须配 Release 版
       # wrapper（DCHECK 改 ABI），flutter build 内部的 pod install 读此变量。
       CEF_WRAPPER_BUILD_TYPE: Release
+      # 交叉构建目标架构（脚本与 podspec 都按它选 CEF 发行版/剔除切片）。
+      CEF_TARGET_ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v7
 
@@ -186,10 +194,9 @@ jobs:
           --build-name="$BUILD_NAME" --build-number="$BUILD_NUMBER"
           --dart-define=BUILD_HASH="$BUILD_HASH"
 
-      # CEF 只提供本机架构（CI 是 arm64）二进制，podspec 已剔除 x86_64
-      # 切片，产物即 arm64 单架构——不再像从前那样 universal 构建再剥双
-      # 架构。Intel Mac 待上游 universal 支持（webview_cef#30）后恢复。
-      - name: 打 DMG（arm64 单架构）
+      # 单架构产物（podspec 已按 CEF_TARGET_ARCH 剔除另一架构切片），
+      # 直接打 DMG；两个矩阵任务各出一份。
+      - name: 打 DMG（${{ matrix.arch }} 单架构）
         run: |
           mkdir -p dist
           APP="build/macos/Build/Products/Release/ZCode远程客户端.app"
@@ -199,12 +206,12 @@ jobs:
           cp -R "$APP" "$DMGROOT/"
           ln -s /Applications "$DMGROOT/Applications"
           hdiutil create -volname "ZCode远程客户端" -srcfolder "$DMGROOT" \
-            -format UDZO -ov "dist/zcode-remote-client-macos-arm64-v$BUILD_NAME-$BUILD_HASH.dmg" > /dev/null
+            -format UDZO -ov "dist/zcode-remote-client-macos-${{ matrix.arch }}-v$BUILD_NAME-$BUILD_HASH.dmg" > /dev/null
           ls -lh dist/
 
       - uses: actions/upload-artifact@v7
         with:
-          name: macos-dmgs
+          name: macos-dmgs-${{ matrix.arch }}
           path: dist/
 
   windows:
@@ -308,5 +315,6 @@ jobs:
             zcode-remote-client-android-armeabi-v7a-*.apk \
             zcode-remote-client-android-x86_64-*.apk \
             zcode-remote-client-macos-arm64-*.dmg \
+            zcode-remote-client-macos-x86_64-*.dmg \
             zcode-remote-client-windows-x64-*.zip
           # arm64 APK 必须第一个上传（旧版本应用内更新器固定取第一个 .apk）
