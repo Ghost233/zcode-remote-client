@@ -31,7 +31,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final List<String> _openIds = [];
   final Map<String, InAppWebViewController> _controllers = {};
-  final Map<String, ValueNotifier<double>> _viewZooms = {};
+  final Map<String, ValueNotifier<double>> _pageZooms = {};
   final Map<String, GlobalKey<BrowserViewState>> _viewKeys = {};
 
   /// 是否已做过启动自动恢复（只恢复一次，之后由用户操作驱动）。
@@ -53,21 +53,21 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
-    for (final z in _viewZooms.values) {
+    for (final z in _pageZooms.values) {
       z.dispose();
     }
     super.dispose();
   }
 
-  void _open(String id, {double? initialViewZoom}) {
+  void _open(String id, {double? initialPageZoom}) {
     if (!_openIds.contains(id)) {
       setState(() {
         _openIds.add(id);
-        _viewZooms[id] = ValueNotifier(initialViewZoom ?? 1.0);
+        _pageZooms[id] = ValueNotifier(initialPageZoom ?? 1.0);
         _viewKeys[id] = GlobalKey<BrowserViewState>();
       });
       // 缩放变化时持久化，刷新/重启后可复用。
-      _viewZooms[id]!.addListener(_persistZooms);
+      _pageZooms[id]!.addListener(_persistZooms);
     }
   }
 
@@ -75,7 +75,7 @@ class _HomePageState extends State<HomePage> {
     final store = context.read<DeviceStore>();
     final id = store.currentId;
     if (id == null) return;
-    store.setZooms(_viewZooms[id]?.value ?? 1.0);
+    store.setPageZoom(_pageZooms[id]?.value ?? 1.0);
   }
 
   Future<void> _selectDevice(RemoteDevice device) async {
@@ -83,9 +83,10 @@ class _HomePageState extends State<HomePage> {
     final switching = store.currentId != device.id;
     _open(device.id);
     if (switching) {
-      // 需求：切到另一个会话时，缩放和平移重置为默认（Android 的
-      // 原生双指缩放属于各会话自己的 WebView，也一并复位）。
-      _viewZooms[device.id]?.value = 1.0;
+      // 需求：切到另一个会话时，缩放和平移重置为默认。双指缩放不经过
+      // 通知器（通知器已是 1.0 时监听器不会触发），Android 原生缩放
+      // 要显式复位兜底。
+      _pageZooms[device.id]?.value = 1.0;
       await resetNativeZoom(_controllers[device.id]);
       final view = _viewKeys[device.id]?.currentState;
       if (view != null && view.panMode.value) view.setPanMode(false);
@@ -97,7 +98,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _openIds.remove(device.id);
       _controllers.remove(device.id);
-      _viewZooms.remove(device.id)?.dispose();
+      _pageZooms.remove(device.id)?.dispose();
       _viewKeys.remove(device.id);
     });
     // 关掉的是当前会话且还有其他会话保活着 → 切到最近打开的那个，
@@ -105,7 +106,7 @@ class _HomePageState extends State<HomePage> {
     final store = context.read<DeviceStore>();
     if (store.currentId == device.id && _openIds.isNotEmpty) {
       final nextId = _openIds.last;
-      _viewZooms[nextId]?.value = 1.0;
+      _pageZooms[nextId]?.value = 1.0;
       resetNativeZoom(_controllers[nextId]);
       final view = _viewKeys[nextId]?.currentState;
       if (view != null && view.panMode.value) view.setPanMode(false);
@@ -170,7 +171,7 @@ class _HomePageState extends State<HomePage> {
         _open(
           currentId,
           // 启动恢复时套用保存的缩放比例。
-          initialViewZoom: store.savedViewZoom,
+          initialPageZoom: store.savedPageZoom,
         );
       });
     }
@@ -214,9 +215,9 @@ class _HomePageState extends State<HomePage> {
                   child: FloatingDock(
                     controller: _currentController(store),
                     viewKey: currentId != null ? _viewKeys[currentId] : null,
-                    viewZoom:
-                        currentId != null && _viewZooms.containsKey(currentId)
-                        ? _viewZooms[currentId]!
+                    pageZoom:
+                        currentId != null && _pageZooms.containsKey(currentId)
+                        ? _pageZooms[currentId]!
                         : ValueNotifier(1.0),
                     onReplaceAddress: () {
                       final device = store.current;
@@ -265,7 +266,7 @@ class _HomePageState extends State<HomePage> {
           setState(() {
             _openIds.remove(id);
             _controllers.remove(id);
-            _viewZooms.remove(id)?.dispose();
+            _pageZooms.remove(id)?.dispose();
             _viewKeys.remove(id);
           });
         }
@@ -275,7 +276,7 @@ class _HomePageState extends State<HomePage> {
     return BrowserView(
       key: _viewKeys[id],
       device: device,
-      viewZoom: _viewZooms[id]!,
+      pageZoom: _pageZooms[id]!,
       onControllerReady: (controller) {
         _controllers[id] = controller;
         // controller 就绪后必须重建一次，否则工具栏的导航/刷新按钮

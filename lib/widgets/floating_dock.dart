@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -13,8 +14,9 @@ import 'update_dialog.dart';
 ///
 /// 收起态：圆形玻璃悬浮球（终端图标），点击展开；可整球拖拽、吸附左右
 /// 边缘；闲置 3 秒自动吸附到最右侧，累计 5 秒透明度降得更低。
-/// 展开态：竖排玻璃工具栏——设备切换、前进/后退/刷新、平移模式、
-/// 可视缩放、页面操作菜单（含桌面版网站开关）；
+/// 展开态：竖排玻璃工具栏——设备切换、前进/后退/刷新、macOS 系统浏览
+/// 器入口、平移模式、页面缩放（浏览器 Ctrl +/- 式）、页面操作菜单
+/// （含桌面版网站开关）；
 /// 按住顶部把手拖动，位置持久化，展开期间不收起、不淡化。
 /// 从设置/面板隐藏后变成贴边细把手，点击恢复。
 class FloatingDock extends StatefulWidget {
@@ -22,7 +24,7 @@ class FloatingDock extends StatefulWidget {
     super.key,
     required this.controller,
     required this.viewKey,
-    required this.viewZoom,
+    required this.pageZoom,
     required this.onReplaceAddress,
     required this.onOpenSwitcher,
     required this.onDesktopModeChanged,
@@ -35,8 +37,8 @@ class FloatingDock extends StatefulWidget {
   /// 当前 BrowserView 的 key，用于调用复制/分享等页面操作。
   final GlobalKey<BrowserViewState>? viewKey;
 
-  /// 可视缩放（只放大可视范围，不重排）。
-  final ValueNotifier<double> viewZoom;
+  /// 页面缩放（浏览器 Ctrl +/- 式整页缩放，布局重排）。
+  final ValueNotifier<double> pageZoom;
 
   final VoidCallback onReplaceAddress;
 
@@ -108,6 +110,20 @@ class _FloatingDockState extends State<FloatingDock> {
     notifier.value = double.parse(
       snapped.toStringAsFixed(2),
     ).clamp(_minZoom, _maxZoom);
+  }
+
+  /// Android 双指缩放不经过应用内的缩放通知器，展开工具栏时把原生
+  /// 实际倍率读回来，百分比显示才与画面一致（写回通知器会触发一次
+  /// 页面缩放应用，倍率相等时是空操作，不会抖动画面）。
+  Future<void> _syncZoomFromNative() async {
+    if (!Platform.isAndroid) return;
+    final c = widget.controller;
+    if (c == null) return;
+    final scale = await c.getZoomScale();
+    if (!mounted || scale == null) return;
+    if ((widget.pageZoom.value - scale).abs() > 0.005) {
+      widget.pageZoom.value = double.parse(scale.toStringAsFixed(2));
+    }
   }
 
   /// 「更多」面板：网页操作 + 偏好开关 + 应用入口（设置/检查更新）
@@ -264,7 +280,11 @@ class _FloatingDockState extends State<FloatingDock> {
         _containerW = constraints.maxWidth;
         _containerH = constraints.maxHeight;
         final width = _expanded ? _barWidth : _bubbleSize;
-        final estimatedHeight = _expanded ? 530.0 : _bubbleSize;
+        // macOS 多一个「系统浏览器打开」按钮，展开态估高多一些（仅用于
+        // 拖动范围钳制，超高由 SingleChildScrollView 兜底）。
+        final estimatedHeight = _expanded
+            ? (Platform.isMacOS ? 570.0 : 530.0)
+            : _bubbleSize;
         final maxX = (constraints.maxWidth - width).clamp(0.0, double.infinity);
         final maxY = (constraints.maxHeight - estimatedHeight).clamp(
           0.0,
@@ -345,6 +365,7 @@ class _FloatingDockState extends State<FloatingDock> {
       onTap: () {
         _wake();
         setState(() => _expanded = true);
+        _syncZoomFromNative();
       },
       onPanStart: (_) => _wake(),
       onPanUpdate: _onDragUpdate,
@@ -405,17 +426,29 @@ class _FloatingDockState extends State<FloatingDock> {
               tooltip: '刷新',
               onPressed: controller == null ? null : () => controller.reload(),
             ),
+            // macOS 止损入口：内嵌 WKWebView 的中文输入会话问题（发送后
+            // 打不进字）修不动时，一键交给系统浏览器。提升为一等按钮而
+            // 不藏在「更多」里——macOS 上这是常用逃生通道。
+            if (Platform.isMacOS)
+              GlassIconButton(
+                icon: Icons.open_in_browser,
+                tooltip: '在系统浏览器打开（内嵌页输入异常时用）',
+                onPressed: controller == null
+                    ? null
+                    : () => widget.viewKey?.currentState?.openExternal(),
+              ),
             _buildPanToggle(),
             const _Divider(),
-            // 可视缩放：只放大可视范围，页面布局不变（放大镜图标）。
-            // Android 的双指缩放/平移由 WebView 原生提供，点百分比
-            // 回到 100% 时会连同原生缩放一起复位。
+            // 页面缩放：浏览器 Ctrl +/- 式整页缩放（布局重排）。
+            // macOS/iOS 走 WKWebView 原生 pageZoom，Windows 走根节点
+            // CSS zoom，Android 直接驱动 WebView 原生缩放（与双指缩放
+            // 同一份）；点百分比回到 100% 时会把双指缩放一并复位。
             _zoomGroup(
-              notifier: widget.viewZoom,
+              notifier: widget.pageZoom,
               step: 0.25,
               zoomInIcon: Icons.zoom_in,
               zoomOutIcon: Icons.zoom_out,
-              label: '可视缩放（布局不变）',
+              label: '页面缩放',
             ),
             const _Divider(),
             GlassIconButton(
@@ -503,7 +536,8 @@ class _FloatingDockState extends State<FloatingDock> {
               borderRadius: BorderRadius.circular(8),
               onTap: () async {
                 _setZoom(notifier, 1.0, step);
-                // Android 原生双指缩放与可视缩放叠加，复位要一起做。
+                // 双指缩放不经过通知器：通知器已是 1.0 时监听器不触发，
+                // 原生缩放要显式复位兜底（resetNativeZoom 仅 Android 生效）。
                 await resetNativeZoom(widget.controller);
               },
               child: Padding(

@@ -82,10 +82,11 @@ const String kDesktopViewportScript = '''
 ///   在 compositionend 之前已到达）。
 /// - 事件环形日志 window.__zcodeImeLog（60 条），排查输入法问题时可从
 ///   控制台或 evaluateJavascript 读取。
-/// - WebKit 专属自愈：发送一条消息后打不进字（打一个字像被删一个字）。
-///   根因是页面发送后程序化清空仍持有焦点的编辑框，WKWebView 的文本
-///   输入会话（含上次组合输入的标记文本状态）残留失效；检测到"真实
-///   回车放行后编辑框被清空"即 blur+focus 强制重建输入会话。
+///
+/// 注意（v1.1.12 教训）：不要试图用 blur+focus 程序化重建 WKWebView 的
+/// 文本输入会话——DOM 级 focus 不带用户激活，重建不了原生 IME 会话，
+/// 反而会让中文输入法从第一条消息起就打不进（v1.1.13 已回退该尝试）。
+/// 内嵌页输入异常的用户侧解法：点输入框外再点回；或改用系统浏览器。
 String imeEnterGuardScript({required bool webkit}) => '''
 (function() {
   if (window.__zcodeImeGuard) return;
@@ -147,47 +148,15 @@ String imeEnterGuardScript({required bool webkit}) => '''
   window.addEventListener('keydown', guard, true);
   window.addEventListener('keypress', guard, true);
   window.addEventListener('keyup', guard, true);
-  if (IS_WEBKIT) {
-    // 发送后输入会话自愈（仅 macOS）。注册在 guard 之后：guard 吞掉的
-    // 幽灵回车（stopImmediatePropagation）不会到达这里，这里看到的
-    // 只会是用户真实的回车。真实回车后若编辑框随后被页面清空（= 一条
-    // 消息发送成功），blur+focus 强制 WebKit 丢弃失效的输入会话重建，
-    // 否则下一条消息会"打一个字被删一个字"或完全打不进。
-    window.addEventListener('keydown', function(e) {
-      if (e.key !== 'Enter' && e.keyCode !== 13) return;
-      var el = document.activeElement;
-      if (!el) return;
-      // 不用正则判断标签：正则行尾锚点符会和 Dart 字符串插值词法冲突。
-      var tag = (el.tagName || '').toUpperCase();
-      var editable = el.isContentEditable ||
-          tag === 'INPUT' || tag === 'TEXTAREA';
-      if (!editable) return;
-      var checks = 0;
-      var timer = setInterval(function() {
-        checks++;
-        var stillFocused = document.activeElement === el;
-        var empty = stillFocused && (el.isContentEditable
-            ? (el.textContent || '').trim() === ''
-            : !el.value);
-        if (empty) {
-          clearInterval(timer);
-          el.blur();
-          el.focus();
-          rec({type: 'postSendRefocus'});
-        } else if (checks >= 6 || !stillFocused) {
-          clearInterval(timer);
-        }
-      }, 100);
-    }, true);
-  }
 })();
 ''';
 
 /// Android：把 WebView 原生（双指）缩放复位到 100%。
 ///
-/// Android 的双指缩放/平移由 WebView 原生处理（已取代被移除的「页面
-/// 缩放」），工具栏「回到 100%」和切换会话的缩放重置都要把它一并
-/// 复位，否则双指放大后点 100% 只复位可视缩放、画面不动。
+/// 「页面缩放」在 Android 上就是直接驱动这份原生缩放（与双指缩放同一
+/// 份），正常情况下页面缩放通知器变化会把它调好；但双指缩放不经过
+/// 通知器（通知器还是 1.0 时监听器不会触发），所以工具栏「回到
+/// 100%」和切换会话的缩放重置要显式调它兜底。
 /// zoomBy 是相对倍率：当前 scale 的倒数即复位。其他平台没有可编程
 /// 复位的原生缩放，直接跳过。
 Future<void> resetNativeZoom(InAppWebViewController? c) async {
@@ -206,7 +175,7 @@ class BrowserView extends StatefulWidget {
   const BrowserView({
     super.key,
     required this.device,
-    required this.viewZoom,
+    required this.pageZoom,
     required this.onControllerReady,
     required this.onTitleChanged,
     required this.onReplaceAddress,
@@ -214,8 +183,8 @@ class BrowserView extends StatefulWidget {
 
   final RemoteDevice device;
 
-  /// 可视缩放（1.0 = 100%）：CSS transform scale，只放大可视范围，布局不重排。
-  final ValueNotifier<double> viewZoom;
+  /// 页面缩放（1.0 = 100%）：浏览器 Ctrl +/- 式整页缩放，布局会重排。
+  final ValueNotifier<double> pageZoom;
 
   final void Function(InAppWebViewController controller) onControllerReady;
   final void Function(String title) onTitleChanged;
@@ -244,7 +213,7 @@ class BrowserViewState extends State<BrowserView>
   @override
   void initState() {
     super.initState();
-    widget.viewZoom.addListener(_applyViewZoom);
+    widget.pageZoom.addListener(_applyPageZoom);
     // 下拉刷新控制器只有移动端有实现，桌面端构造会抛 UnimplementedError。
     if (Platform.isIOS || Platform.isAndroid) {
       _pullToRefresh = PullToRefreshController(
@@ -262,7 +231,7 @@ class BrowserViewState extends State<BrowserView>
 
   @override
   void dispose() {
-    widget.viewZoom.removeListener(_applyViewZoom);
+    widget.pageZoom.removeListener(_applyPageZoom);
     panMode.dispose();
     super.dispose();
   }
@@ -293,8 +262,8 @@ class BrowserViewState extends State<BrowserView>
     window.__zcodePanCleanup && window.__zcodePanCleanup();
     var el = document.createElement('div');
     el.id = '__zcode_pan_layer';
-    // 覆盖层不能只有一屏大：可视缩放（min 尺寸撑大文档）和原生双指
-    // 缩放后，可平移区域远超一屏，固定层若只有 100vw/vh，屏外区域的
+    // 覆盖层不能只有一屏大：原生缩放（Android 双指/按钮同一机制）放大
+    // 后可平移区域远超一屏，固定层若只有 100vw/vh，屏外区域的
     // 触摸会漏给页面自身滚动，拖动就被 WebView 自己的滚动抢走。
     // touch-action:none + preventDefault 让拖拽层独占手势（代价是
     // 平移期间原生双指缩放也不可用，关掉平移即恢复）。
@@ -332,27 +301,45 @@ class BrowserViewState extends State<BrowserView>
     );
   }
 
-  /// 可视缩放：CSS transform scale，只放大可视范围，不改变页面布局。
-  /// 同时把 html 的最小可视区域按倍率放大，保证缩放后的内容可以滚动到。
-  Future<void> _applyViewZoom() async {
+  /// 页面缩放（布局重排，等效浏览器 Ctrl +/-）。
+  ///
+  /// macOS/iOS：WKWebView 原生 pageZoom（实测 WebKit 下给根节点打 CSS
+  /// zoom 不会重排 vw/vh 和 fixed 布局，页面会错乱；Apple 官方说明
+  /// pageZoom 等价于浏览器整页缩放）。
+  /// Android：直接驱动 WebView 原生缩放（与双指缩放同一份），zoomBy
+  /// 是相对倍率，用 目标值/当前值 换算。原生缩放不改布局视口，fixed
+  /// 输入框不会被挤出屏幕（v1.1.10 的 body CSS zoom 会挤飞输入框，
+  /// v1.1.11 因此删过整组页面缩放，现以原生缩放形式回归）。
+  /// Windows：插件未暴露 WebView2 的 ZoomFactor 设置口；桌面 Chromium
+  /// 下 CSS zoom 根节点即可正确重排，保持 CSS 实现。
+  Future<void> _applyPageZoom() async {
     final c = _controller;
     if (c == null) return;
-    final z = widget.viewZoom.value;
-    await c.evaluateJavascript(
-      source:
-          '''
+    final z = widget.pageZoom.value;
+    if (Platform.isIOS || Platform.isMacOS) {
+      final settings = await c.getSettings();
+      if (settings != null) {
+        settings.pageZoom = z;
+        await c.setSettings(settings: settings);
+      }
+    } else if (Platform.isAndroid) {
+      final scale = await c.getZoomScale();
+      if (scale == null) return;
+      final factor = z / scale;
+      if ((factor - 1.0).abs() < 0.001) return;
+      await c.zoomBy(zoomFactor: factor.clamp(0.02, 100.0));
+    } else {
+      await c.evaluateJavascript(
+        source: '''
 (function() {
   try {
-    var b = document.body, d = document.documentElement;
-    if (!b) return;
-    b.style.transformOrigin = '0 0';
-    b.style.transform = ($z === 1) ? '' : 'scale($z)';
-    d.style.minHeight = ($z * 100) + 'vh';
-    d.style.minWidth = ($z * 100) + 'vw';
+    document.documentElement.style.zoom = '$z';
+    if (document.body) document.body.style.zoom = '';
   } catch (e) {}
 })();
 ''',
-    );
+      );
+    }
   }
 
   Future<void> reload() async {
@@ -635,7 +622,7 @@ class BrowserViewState extends State<BrowserView>
           onLoadStop: (controller, url) async {
             _pullToRefresh?.endRefreshing();
             setState(() => _progress = 1);
-            await _applyViewZoom();
+            await _applyPageZoom();
             // 新文档会清掉注入的拖拽层，平移模式开着的话重新注入。
             if (panMode.value) await _injectPanLayer(controller);
           },
