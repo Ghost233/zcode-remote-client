@@ -444,23 +444,27 @@ class _FloatingDockState extends State<FloatingDock> {
                     : () => session.openExternal(),
               ),
             _buildPanToggle(),
-            // Android：双指缩放复位——手势缩放是 WebView 原生行为，与
-            // +/- 字体缩放互相独立，放大后用这个回到 100%。
+            // Android：视图复位——双指缩放和字体缩放一起归位，页面回到
+            // 刚打开时的整页适配状态（只归双指倍率会残留字体缩放，
+            // 排版依然不是初始适配的样子）。
             if (Platform.isAndroid)
               GlassIconButton(
                 icon: Icons.filter_center_focus,
-                tooltip: '双指缩放复位（回到 100%）',
+                tooltip: '视图复位（回到整页适配）',
                 onPressed: widget.controller == null
                     ? null
-                    : () => resetNativeZoom(widget.controller),
+                    : () async {
+                        await resetNativeZoom(widget.controller);
+                        widget.pageZoom.value = 1.0;
+                      },
               ),
             // 双指缩放开关：Android 可用（默认关），macOS 置灰（只有
             // 整页缩放，没有字体缩放）。
             if (Platform.isAndroid || Platform.isMacOS) _buildPinchToggle(),
             const _Divider(),
             // 缩放组与双指缩放分离：Android 上是字体缩放（textZoom），
-            // +/- 调、百分比复位，只管字体；双指手势缩放的复位在平移
-            // 开关下方的专门按钮。macOS/iOS 是原生整页缩放 pageZoom，
+            // +/- 调、百分比复位，只管字体；双指手势缩放与整体的
+            // 「视图复位」在平移开关下方的专门按钮。macOS/iOS 是原生整页缩放 pageZoom，
             // Windows 是 CSS 根缩放。
             _zoomGroup(
               notifier: widget.pageZoom,

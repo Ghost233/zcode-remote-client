@@ -91,23 +91,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.dispose();
   }
 
-  void _open(String id, {double? initialPageZoom}) {
+  void _open(String id) {
     if (!_openIds.contains(id)) {
       setState(() {
         _openIds.add(id);
-        _pageZooms[id] = ValueNotifier(initialPageZoom ?? 1.0);
+        // 缩放默认 1.0：切 tab 期间各自的缩放保留在内存里，但应用
+        // 重启后不恢复（需求：重启即回到默认适配状态）。
+        _pageZooms[id] = ValueNotifier(1.0);
         _viewKeys[id] = GlobalKey();
       });
-      // 缩放变化时持久化，刷新/重启后可复用。
-      _pageZooms[id]!.addListener(_persistZooms);
     }
-  }
-
-  void _persistZooms() {
-    final store = context.read<DeviceStore>();
-    final id = store.currentId;
-    if (id == null) return;
-    store.setPageZoom(_pageZooms[id]?.value ?? 1.0);
   }
 
   Future<void> _selectDevice(RemoteDevice device) async {
@@ -115,10 +108,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final switching = store.currentId != device.id;
     _open(device.id);
     if (switching) {
-      // 需求：切到另一个会话时，缩放和平移重置为默认。Android 双指缩放
-      // 与页面缩放互相独立，要显式复位。
-      _pageZooms[device.id]?.value = 1.0;
-      await resetNativeZoom(_controllers[device.id]);
+      // 切会话保留各自的缩放（双指缩放是 WebView 自身状态，本来就
+      // 跟着会话走）；只收起平移模式，避免抓手模式跨会话误操作。
       final session = sessionOf(_viewKeys[device.id]);
       if (session != null && session.panMode.value) {
         session.setPanMode(false);
@@ -135,12 +126,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _viewKeys.remove(device.id);
     });
     // 关掉的是当前会话且还有其他会话保活着 → 切到最近打开的那个，
-    // 同样按"切换会话"处理：缩放和平移重置。
+    // 保留其缩放，只收起平移模式。
     final store = context.read<DeviceStore>();
     if (store.currentId == device.id && _openIds.isNotEmpty) {
       final nextId = _openIds.last;
-      _pageZooms[nextId]?.value = 1.0;
-      resetNativeZoom(_controllers[nextId]);
       final session = sessionOf(_viewKeys[nextId]);
       if (session != null && session.panMode.value) {
         session.setPanMode(false);
@@ -207,11 +196,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _autoOpened = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _open(
-          currentId,
-          // 启动恢复时套用保存的缩放比例。
-          initialPageZoom: store.savedPageZoom,
-        );
+        _open(currentId);
       });
     }
 
