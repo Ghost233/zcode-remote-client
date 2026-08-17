@@ -128,7 +128,8 @@ const String kAndroidSafeAreaScript = '''
 (function() {
   if (window.__zcodeSafeArea) return;
   window.__zcodeSafeArea = true;
-  var css = ':root{--zsat:max(env(safe-area-inset-top,0px),var(--zsatpx,0px));'
+  var css = 'html,body{box-sizing:border-box}'
+    + ':root{--zsat:max(env(safe-area-inset-top,0px),var(--zsatpx,0px));'
     + '--zsab:max(env(safe-area-inset-bottom,0px),var(--zsabpx,0px));'
     + '--zsal:max(env(safe-area-inset-left,0px),var(--zsalpx,0px));'
     + '--zsar:max(env(safe-area-inset-right,0px),var(--zsarpx,0px))}'

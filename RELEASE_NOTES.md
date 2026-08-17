@@ -1,3 +1,7 @@
+## v1.4.3
+
+- **补上 v1.4.2 安全区方案的一个布局缺陷**：应用型网页（zcode 即是）几乎都是 `html/body height:100%` 的满高布局，CSS 默认 content-box 下注入的 `body padding` 会让实际高度变成 100% + 安全区，底部输入条反而被推出屏幕外。现给 html/body 补 `box-sizing: border-box`，padding 计入 100% 之内，内容区正确收缩
+
 ## v1.4.2
 
 - **修复 v1.4.1 在 Android 挖孔屏上仍被摄像头挡住的问题**：Android WebView 内核不给 CSS `env(safe-area-inset-*)` 填真实值（一律返回 0，与 Chrome 不同），纯 CSS 注入在挖孔屏无效。现由宿主桥接：把 Flutter 层的真实系统栏 inset（WindowInsets 驱动，edge-to-edge 下数值可靠）写成具体像素的 CSS 变量注入网页，样式取 `max(env(...), 具体值)` 双保险；旋转/挖孔姿态变化自动重下发，页面跳转后重桥接；用 viewPadding 取值，键盘弹出时不会给网页底部多加 padding
