@@ -15,6 +15,9 @@ ZCode 远程终端跨平台客户端（iOS / Android / macOS / Windows），内�
 - **Release tag（`vX.Y.Z`）由 CI 按 pubspec 版本自动打**，不再手写 tag，
   也因此天然不会出现 tag 与版本不一致的问题；应用内更新比较的仍是
   tag 与 app 内置版本
+- **更新日志只保留最新 10 条**：RELEASE_NOTES.md 只写最近 10 个版本的
+  说明（新增一条就删掉最旧一条）；CI 发 Release 正文和应用内更新弹窗
+  都会再切一次前 10 个 `## ` 小节兜底
 
 ## 发版流程（GitHub Actions 全自动，public 仓库免费）
 

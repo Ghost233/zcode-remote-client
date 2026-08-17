@@ -290,7 +290,8 @@ jobs:
           {
             echo "由 commit $HASH6 自动构建发布。"
             echo ""
-            cat RELEASE_NOTES.md
+            # 更新日志只保留最新 10 条（第 11 个 ## 小节起全部丢弃）
+            awk '/^## /{n++} n<=10' RELEASE_NOTES.md
           } > /tmp/notes.md
           cd dist
           ls -lh

@@ -87,6 +87,13 @@ class _SegmentAborted implements Exception {
 }
 
 class UpdateChecker {
+  /// 保留 notes 的前 10 个 `## ` 小节（不足 10 个则原样返回）。
+  static String _latestTenSections(String notes) {
+    final sections = notes.split(RegExp(r'^## ', multiLine: true));
+    if (sections.length <= 11) return notes; // 首段（引导行）+ 10 节
+    return sections.first + sections.sublist(1, 11).map((s) => '## $s').join();
+  }
+
   /// 拉取最新 release；网络失败/限流时返回 null（调用方按需提示）。
   static Future<AppRelease?> fetchLatest() async {
     try {
@@ -103,7 +110,9 @@ class UpdateChecker {
       return AppRelease(
         tagName: json['tag_name'] as String,
         htmlUrl: json['html_url'] as String,
-        notes: (json['body'] as String?) ?? '',
+        // 更新日志最多展示最新 10 条（第 11 个 ## 小节起丢弃），
+        // 与 CI 发布正文的切片规则保持一致。
+        notes: _latestTenSections((json['body'] as String?) ?? ''),
         assets: ((json['assets'] as List?) ?? const [])
             .map(
               (e) => ReleaseAsset(
