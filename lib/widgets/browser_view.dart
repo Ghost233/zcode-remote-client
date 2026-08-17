@@ -270,17 +270,32 @@ const String kImeTextRecoverScript = '''
     lastData = '';
     beforeText = null;
     if (!data || before === null) return;
-    setTimeout(function() {
+    // 「整理文本」会反复多轮重排，固定延时判太早。等文本稳定：
+    // 每 150ms 轮询，内容还在变就继续等（上限约 2.5s），连续两拍
+    // 不变后再判定；期间新组合开始则放弃本次（交给下一轮）。
+    var prev = null;
+    var tries = 0;
+    (function poll() {
+      if (beforeText !== null) return;
       var ed = editor();
       if (!ed || !document.contains(ed)) return;
-      // 只有「整段被吞」才回填：组合结束后编辑器内容和组合开始前
-      // 一模一样（一个字都没插进去）。编辑器有任何插入——哪怕顺序
-      // 不对（整理文本会被页面重排）——都不碰，避免重复插入导致
-      // 行序错乱（v1.5.3 的判定只查原样包含，重排后匹配不上就误
-      // 补了一次，和已插入内容叠出乱序）。
-      if ((ed.innerText || '') !== before) return;
-      try { document.execCommand('insertText', false, data); } catch (err) {}
-    }, 100);
+      var cur = ed.innerText || '';
+      if (prev === null) {
+        prev = cur;
+        setTimeout(poll, 150);
+        return;
+      }
+      if (cur !== prev && tries++ < 15) {
+        prev = cur;
+        setTimeout(poll, 150);
+        return;
+      }
+      // 整段被吞才回填：内容与组合开始前一模一样（一个字都没进去）。
+      // 编辑器有任何插入（哪怕顺序不对）都不碰，避免重复插入乱序。
+      if (cur === before) {
+        try { document.execCommand('insertText', false, data); } catch (err) {}
+      }
+    })();
   }, true);
 })();
 ''';
