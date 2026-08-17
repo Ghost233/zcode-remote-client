@@ -235,71 +235,6 @@ const String kPageBackgroundScript = '''
 })();
 ''';
 
-/// 输入法组合文本被编辑器吞掉后的自动回填。
-///
-/// 背景：页面用的 Lexical 编辑器有已知 bug（facebook/lexical #8179，
-/// 修复 PR 未合并）：拼音组合提交时它在检查数据之前就拦截默认行为，
-/// 把组合中的文本整段清掉——iPhone Safari 原生打开也复现，属于页面
-/// 自身问题，注入脚本治不了本，只能补救。
-///
-/// 做法：跟踪每次组合的最新文本（compositionupdate），组合结束后
-/// 100ms 检查编辑器内容——若刚组合的文本没有出现在编辑器里（非空、
-/// 也非用户主动删除的时间窗），用 execCommand('insertText') 原地补
-/// 回。insertText 走 beforeinput 的常规打字路径，Lexical 对这条路径
-/// 的状态处理是安全的（此前出问题的是换行/组合路径）。
-const String kImeTextRecoverScript = '''
-(function() {
-  if (window.__zcodeImeRecover) return;
-  window.__zcodeImeRecover = true;
-  var lastData = '';
-  var beforeText = null;
-  function editor() {
-    var a = document.activeElement;
-    return a && a.closest ? a.closest('[contenteditable="true"]') : null;
-  }
-  window.addEventListener('compositionstart', function() {
-    var ed = editor();
-    beforeText = ed ? (ed.innerText || '') : null;
-  }, true);
-  window.addEventListener('compositionupdate', function(e) {
-    if (e.data) lastData = e.data;
-  }, true);
-  window.addEventListener('compositionend', function() {
-    var data = lastData;
-    var before = beforeText;
-    lastData = '';
-    beforeText = null;
-    if (!data || before === null) return;
-    // 「整理文本」会反复多轮重排，固定延时判太早。等文本稳定：
-    // 每 150ms 轮询，内容还在变就继续等（上限约 2.5s），连续两拍
-    // 不变后再判定；期间新组合开始则放弃本次（交给下一轮）。
-    var prev = null;
-    var tries = 0;
-    (function poll() {
-      if (beforeText !== null) return;
-      var ed = editor();
-      if (!ed || !document.contains(ed)) return;
-      var cur = ed.innerText || '';
-      if (prev === null) {
-        prev = cur;
-        setTimeout(poll, 150);
-        return;
-      }
-      if (cur !== prev && tries++ < 15) {
-        prev = cur;
-        setTimeout(poll, 150);
-        return;
-      }
-      // 整段被吞才回填：内容与组合开始前一模一样（一个字都没进去）。
-      // 编辑器有任何插入（哪怕顺序不对）都不碰，避免重复插入乱序。
-      if (cur === before) {
-        try { document.execCommand('insertText', false, data); } catch (err) {}
-      }
-    })();
-  }, true);
-})();
-''';
-
 /// 把 CSS 颜色串（rgb()/rgba()）解析成 Flutter Color，失败返回 null。
 Color? parseCssColor(String css) {
   final m = RegExp(
@@ -810,10 +745,6 @@ class BrowserViewState extends State<BrowserView>
               source: kEnterRemapScript,
               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
             ),
-            UserScript(
-              source: kImeTextRecoverScript,
-              injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-            ),
             if (desktopMode)
               UserScript(
                 source: kDesktopViewportScript,
@@ -863,9 +794,6 @@ class BrowserViewState extends State<BrowserView>
             // AT_DOCUMENT_START 已装上，这里只防注入时序异常。
             await controller.evaluateJavascript(source: kImeEnterGuardScript);
             await controller.evaluateJavascript(source: kEnterRemapScript);
-            await controller.evaluateJavascript(
-              source: kImeTextRecoverScript,
-            );
             // 读取页面实际背景色：宿主用它把 Android SafeArea 露出的
             // 区域刷成与页面同色。SPA 可能稍后才挂内容，延迟再取一次。
             _readPageBackground(controller);
