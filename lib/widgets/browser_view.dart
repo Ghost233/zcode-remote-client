@@ -113,21 +113,25 @@ const String kImeEnterGuardScript = '''
 })();
 ''';
 
-/// Android：安全区适配（刘海屏状态栏 / 底部手势条）。
+/// Android：安全区适配（挖孔屏状态栏 / 底部手势条）。
 ///
 /// edge-to-edge 下 WebView 完全铺满，系统栏悬浮在网页上。规范做法是
-/// 网页层用 CSS `env(safe-area-inset-*)` 自己避让（Android WebView
-/// 内核原生支持），原生层不加 padding——背景仍铺满全屏，只有内容
-/// 缩进安全区。第三方页面没写这套 CSS，这里注入兜底；同时把值挂在
-/// CSS 变量上，页面自己的样式也可以消费。
+/// 网页层用 CSS `env(safe-area-inset-*)` 自己避让，原生层不加
+/// padding——背景仍铺满全屏，只有内容缩进安全区。
+///
+/// 但 Android WebView 内核不给 env() 填真实值（返回 0，与 Chrome 不同，
+/// 实测挖孔屏无效），所以必须由宿主桥接：Flutter 的 viewPadding 在
+/// edge-to-edge 下由 WindowInsets 驱动、数值可靠，把它写成具体像素的
+/// CSS 变量（--zsatpx 等）注入网页，CSS 里 `max(env(...), 具体值)`
+/// 双保险。第三方页面没写这套 CSS，这里注入兜底；变量也供页面消费。
 const String kAndroidSafeAreaScript = '''
 (function() {
   if (window.__zcodeSafeArea) return;
   window.__zcodeSafeArea = true;
-  var css = ':root{--zsat:env(safe-area-inset-top,0px);'
-    + '--zsab:env(safe-area-inset-bottom,0px);'
-    + '--zsal:env(safe-area-inset-left,0px);'
-    + '--zsar:env(safe-area-inset-right,0px)}'
+  var css = ':root{--zsat:max(env(safe-area-inset-top,0px),var(--zsatpx,0px));'
+    + '--zsab:max(env(safe-area-inset-bottom,0px),var(--zsabpx,0px));'
+    + '--zsal:max(env(safe-area-inset-left,0px),var(--zsalpx,0px));'
+    + '--zsar:max(env(safe-area-inset-right,0px),var(--zsarpx,0px))}'
     + 'body{padding-top:var(--zsat)!important;padding-bottom:var(--zsab)!important;'
     + 'padding-left:var(--zsal)!important;padding-right:var(--zsar)!important}';
   function apply() {
@@ -597,9 +601,37 @@ class BrowserViewState extends State<BrowserView>
 
   // ---------- 构建 ----------
 
+  /// 最近一次桥接给网页的 Android 安全区 inset（逻辑像素），
+  /// 变化时（旋转、折叠、挖孔姿态变化）重新下发。
+  EdgeInsets? _lastPushedInsets;
+
+  /// Android 安全区桥接：把 Flutter 层的真实系统栏 inset 写成具体
+  /// 像素的 CSS 变量注入网页（WebView 内核的 env() 返回 0，靠不住）。
+  /// 用 viewPadding 而非 padding：键盘弹出时 viewPadding 不变，
+  /// 不会给网页底部凭空加一条 padding。
+  void _pushAndroidInsets() {
+    if (!Platform.isAndroid) return;
+    final controller = _controller;
+    if (controller == null) return;
+    final insets = MediaQuery.maybeViewPaddingOf(context);
+    if (insets == null || insets == _lastPushedInsets) return;
+    _lastPushedInsets = insets;
+    controller.evaluateJavascript(source: '''
+(function() {
+  var r = document.documentElement;
+  r.style.setProperty('--zsatpx', '${insets.top}px');
+  r.style.setProperty('--zsabpx', '${insets.bottom}px');
+  r.style.setProperty('--zsalpx', '${insets.left}px');
+  r.style.setProperty('--zsarpx', '${insets.right}px');
+})();
+''');
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    // MediaQuery 依赖：inset 变化触发重建，这里把新值桥接给网页。
+    _pushAndroidInsets();
     // 桌面模式是"创建时"快照：UA / 原生 contentMode / 视口脚本都只能随
     // WebView 重建生效，切换开关时由外部重建当前会话。
     final desktopMode = context.watch<DeviceStore>().desktopMode;
@@ -674,6 +706,9 @@ class BrowserViewState extends State<BrowserView>
               await controller.evaluateJavascript(
                 source: kAndroidSafeAreaScript,
               );
+              // 新文档会丢 root 上的内联变量，重桥接一次 inset。
+              _lastPushedInsets = null;
+              _pushAndroidInsets();
             }
           },
           onProgressChanged: (controller, progress) {
