@@ -155,11 +155,26 @@ const String kEnterRemapScript = '''
     }
     return null;
   }
+  // 组合窗口跟踪：Lexical 的组合状态机靠 keydown 收尾（WebKit 的
+  // 'ending' 相位），组合期间/刚结束的回车被止住传播会让它收不了尾，
+  // MutationObserver 回同步时误删文本（lexical #8179/#8697 一族）。
+  // 所以组合活跃或结束后 100ms 内的回车一律完全不碰（由回车防护
+  // 脚本负责拦页面的发送），这里只处理明确的「组合窗口外」回车。
+  var composing = false;
+  var endedWall = -1;
+  window.addEventListener('compositionstart', function() {
+    composing = true;
+  }, true);
+  window.addEventListener('compositionend', function() {
+    composing = false;
+    endedWall = Date.now();
+  }, true);
   window.addEventListener('keydown', function(e) {
     if (e.key !== 'Enter') return;
     if (passthrough) return;
     // 输入法组合态回车放行（提交候选的原生行为）
     if (e.isComposing || e.keyCode === 229) return;
+    if (composing || (endedWall >= 0 && Date.now() - endedWall < 100)) return;
     var ed = e.target && e.target.closest
       ? e.target.closest('[contenteditable="true"]') : null;
     if (!ed) return;
