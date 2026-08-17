@@ -66,10 +66,10 @@ const String kDesktopViewportScript = '''
 
 /// Android：把 WebView 原生（双指）缩放复位到 100%。
 ///
-/// 双指缩放由 WebView 原生处理，不经应用内的缩放通知器（「页面缩放」
-/// 在 Android 上是 textZoom 字体缩放，与双指缩放互相独立）。「回到
-/// 100%」和切换会话的缩放重置都把双指缩放一并复位，避免双指放大后
-/// 无法还原。zoomBy 是相对倍率：当前 scale 的倒数即复位。
+/// 双指缩放由 WebView 原生处理，与「字体缩放」（textZoom）互相独立，
+/// 两者复位入口也分开：工具栏平移开关下方有专门的双指复位按钮，
+/// +/- 组中间的百分比只复位字体缩放；切换会话时则两者一起复位。
+/// zoomBy 是相对倍率：当前 scale 的倒数即复位。
 /// 其他平台没有可编程复位的原生缩放，直接跳过。
 Future<void> resetNativeZoom(InAppWebViewController? c) async {
   if (c == null || !Platform.isAndroid) return;
@@ -116,6 +116,44 @@ class BrowserViewState extends State<BrowserView>
   InAppWebViewHitTestResult? _lastHitTest;
   double _progress = 0;
   WebResourceError? _mainFrameError;
+
+  /// WebView 设置快照：initialSettings 的唯一权威来源。
+  ///
+  /// 运行期改设置（缩放、双指开关）都改这份再整体下发，不做
+  /// getSettings→改→setSettings 往返——那条链路任何一环静默失败
+  /// 的表现就是「点了没反应」（v1.3.6 Android 字体缩放实测如此，
+  /// 且失败完全不可见）。自持快照后每次下发都带全量已知状态，
+  /// 缩放值还随 WebView 创建即生效（保存的比例重启即恢复）。
+  /// 桌面模式切换由外部换 GlobalKey 重建会话，快照随之重建，
+  /// UA / contentMode 取的是创建时的快照值，语义不变。
+  InAppWebViewSettings? _liveSettings;
+
+  InAppWebViewSettings _settingsSnapshot(bool desktopMode) =>
+      _liveSettings ??= InAppWebViewSettings(
+        javaScriptEnabled: true,
+        useShouldOverrideUrlLoading: true,
+        useOnDownloadStart: true,
+        supportMultipleWindows: true,
+        javaScriptCanOpenWindowsAutomatically: true,
+        mediaPlaybackRequiresUserGesture: false,
+        allowsInlineMediaPlayback: true,
+        // iOS 侧滑前进/后退
+        allowsBackForwardNavigationGestures: true,
+        isFraudulentWebsiteWarningEnabled: false,
+        disableContextMenu: false,
+        // 桌面模式三项配合，等效浏览器"桌面版网站"开关：
+        // 1) 桌面 Chrome UA；2) iOS 原生 preferredContentMode（Safari
+        //    "请求桌面网站"的实现）；3) 注入脚本把 viewport 钉在 1280
+        //    宽（移动端按桌面宽度渲染，桌面端忽略 viewport 无副作用）。
+        userAgent: desktopMode ? kDesktopUserAgent : null,
+        preferredContentMode: desktopMode
+            ? UserPreferredContentMode.DESKTOP
+            : UserPreferredContentMode.RECOMMENDED,
+        // 缩放随创建生效：iOS/macOS 用原生 pageZoom，Android 用系统级
+        // 字体缩放 textZoom（两者互不相干，各平台实现只认自己的键）。
+        pageZoom: widget.pageZoom.value,
+        textZoom: (widget.pageZoom.value * 100).round(),
+      );
 
   /// 平移（抓手）模式开关，工具栏读取/切换。
   @override
@@ -188,54 +226,61 @@ class BrowserViewState extends State<BrowserView>
 
   /// Android：双指缩放 = WebView 缩放设置（supportZoom + 内建缩放控件，
   /// 不显示系统缩放按钮）。运行时切换即时生效；插件默认是开，开关
-  /// 默认关，所以 WebView 创建时也要按开关状态显式应用一次。
+  /// 默认关，所以 WebView 创建后也要按开关状态显式应用一次。
   Future<void> _applyPinchSettings(
     InAppWebViewController c,
     bool enabled,
   ) async {
-    final settings = await c.getSettings();
-    if (settings == null) return;
-    settings.supportZoom = enabled;
-    settings.builtInZoomControls = enabled;
-    settings.displayZoomControls = false;
-    await c.setSettings(settings: settings);
+    final s = _liveSettings;
+    if (s == null) return;
+    s.supportZoom = enabled;
+    s.builtInZoomControls = enabled;
+    s.displayZoomControls = false;
+    try {
+      await c.setSettings(settings: s);
+    } catch (e) {
+      _toast('双指缩放开关失败：$e');
+    }
   }
 
   Future<void> _injectPanLayer(InAppWebViewController c) {
     return c.evaluateJavascript(source: kPanLayerScript);
   }
 
-  /// 页面缩放（布局重排，等效浏览器 Ctrl +/-）。
+  /// 页面缩放（布局重排，等效浏览器 Ctrl +/-）。各平台实现分离：
   ///
-  /// macOS/iOS：WKWebView 原生 pageZoom（实测 WebKit 下给根节点打 CSS
-  /// zoom 不会重排 vw/vh 和 fixed 布局，页面会错乱；Apple 官方说明
-  /// pageZoom 等价于浏览器整页缩放）。
-  /// Android：系统级文字缩放 textZoom——只放大字体、按新字号重排布局，
-  /// 不改布局视口，fixed 输入框不会被挤出屏幕（v1.1.10 的 body CSS
-  /// zoom 会挤飞输入框；v1.2.3 用过的 zoomBy 原生缩放是「双指缩放那种」
-  /// 整幅画面放大，用户要的是字体放大，故弃）。设置经 getSettings/
-  /// setSettings 全量下发，textZoom 变化即时生效（插件 Android 实现
-  /// 有专门分支）。
-  /// Windows：插件未暴露 WebView2 的 ZoomFactor 设置口；桌面 Chromium
-  /// 下 CSS zoom 根节点即可正确重排，保持 CSS 实现。
+  /// - Android：系统级文字缩放 textZoom——只放大字体、按新字号重排布局，
+  ///   不改布局视口，fixed 输入框不会被挤出屏幕（v1.1.10 的 body CSS
+  ///   zoom 会挤飞输入框；zoomBy 原生缩放是「双指缩放那种」整幅画面
+  ///   放大，与字体缩放是两套东西，复位按钮也各自独立）。
+  /// - macOS/iOS：WKWebView 原生 pageZoom（实测 WebKit 下给根节点打 CSS
+  ///   zoom 不会重排 vw/vh 和 fixed 布局，页面会错乱；Apple 官方说明
+  ///   pageZoom 等价于浏览器整页缩放）。
+  /// - Windows：插件未暴露 WebView2 的 ZoomFactor 设置口；桌面 Chromium
+  ///   下 CSS zoom 根节点即可正确重排，保持 CSS 实现。
+  ///
+  /// 原生缩放值（pageZoom/textZoom）是 WebView 自身属性，跨页面加载
+  /// 保留；改的是同一份设置快照再整体下发，不依赖 getSettings 往返
+  /// （往返链路任何一环静默失败都会让缩放「点了没反应」且无从察觉，
+  /// 失败时这里弹 toast 把问题暴露出来）。
   Future<void> _applyPageZoom() async {
     final c = _controller;
     if (c == null) return;
     final z = widget.pageZoom.value;
-    if (Platform.isIOS || Platform.isMacOS) {
-      final settings = await c.getSettings();
-      if (settings != null) {
-        settings.pageZoom = z;
-        await c.setSettings(settings: settings);
+    final s = _liveSettings;
+    try {
+      if (Platform.isWindows) {
+        await c.evaluateJavascript(source: kPageZoomScript(z));
+      } else if (s != null) {
+        if (Platform.isAndroid) {
+          s.textZoom = (z * 100).round();
+        } else {
+          s.pageZoom = z;
+        }
+        await c.setSettings(settings: s);
       }
-    } else if (Platform.isAndroid) {
-      final settings = await c.getSettings();
-      if (settings != null) {
-        settings.textZoom = (z * 100).round();
-        await c.setSettings(settings: settings);
-      }
-    } else {
-      await c.evaluateJavascript(source: kPageZoomScript(z));
+    } catch (e) {
+      _toast('缩放应用失败：$e');
     }
   }
 
@@ -476,27 +521,9 @@ class BrowserViewState extends State<BrowserView>
       children: [
         InAppWebView(
           initialUrlRequest: URLRequest(url: WebUri(widget.device.url)),
-          initialSettings: InAppWebViewSettings(
-            javaScriptEnabled: true,
-            useShouldOverrideUrlLoading: true,
-            useOnDownloadStart: true,
-            supportMultipleWindows: true,
-            javaScriptCanOpenWindowsAutomatically: true,
-            mediaPlaybackRequiresUserGesture: false,
-            allowsInlineMediaPlayback: true,
-            // iOS 侧滑前进/后退
-            allowsBackForwardNavigationGestures: true,
-            isFraudulentWebsiteWarningEnabled: false,
-            disableContextMenu: false,
-            // 桌面模式三项配合，等效浏览器"桌面版网站"开关：
-            // 1) 桌面 Chrome UA；2) iOS 原生 preferredContentMode（Safari
-            //    "请求桌面网站"的实现）；3) 注入脚本把 viewport 钉在 1280
-            //    宽（移动端按桌面宽度渲染，桌面端忽略 viewport 无副作用）。
-            userAgent: desktopMode ? kDesktopUserAgent : null,
-            preferredContentMode: desktopMode
-                ? UserPreferredContentMode.DESKTOP
-                : UserPreferredContentMode.RECOMMENDED,
-          ),
+          // 设置快照是唯一权威来源（创建时带上缩放初值；运行期改设置
+          // 也改这份再下发，见 _settingsSnapshot）。
+          initialSettings: _settingsSnapshot(desktopMode),
           // 零常驻脚本（与 v1.1.1 完全一致）；桌面模式才注入视口脚本。
           initialUserScripts: desktopMode
               ? UnmodifiableListView([

@@ -284,14 +284,14 @@ class _FloatingDockState extends State<FloatingDock> {
         _containerW = constraints.maxWidth;
         _containerH = constraints.maxHeight;
         final width = _expanded ? _barWidth : _bubbleSize;
-        // macOS 多「系统浏览器打开」+「双指缩放」，Android 多「双指缩放」，
-        // 展开态估高多一些（仅用于拖动范围钳制，超高由
-        // SingleChildScrollView 兜底）。
+        // macOS 多「系统浏览器打开」+「双指缩放」，Android 多「双指缩放
+        // 复位」+「双指缩放」，展开态估高多一些（仅用于拖动范围钳制，
+        // 超高由 SingleChildScrollView 兜底）。
         final estimatedHeight = _expanded
             ? (Platform.isMacOS
                   ? 610.0
                   : Platform.isAndroid
-                  ? 570.0
+                  ? 620.0
                   : 530.0)
             : _bubbleSize;
         final maxX = (constraints.maxWidth - width).clamp(0.0, double.infinity);
@@ -444,20 +444,30 @@ class _FloatingDockState extends State<FloatingDock> {
                     : () => session.openExternal(),
               ),
             _buildPanToggle(),
+            // Android：双指缩放复位——手势缩放是 WebView 原生行为，与
+            // +/- 字体缩放互相独立，放大后用这个回到 100%。
+            if (Platform.isAndroid)
+              GlassIconButton(
+                icon: Icons.filter_center_focus,
+                tooltip: '双指缩放复位（回到 100%）',
+                onPressed: widget.controller == null
+                    ? null
+                    : () => resetNativeZoom(widget.controller),
+              ),
             // 双指缩放开关：Android 可用（默认关），macOS 置灰（只有
             // 整页缩放，没有字体缩放）。
             if (Platform.isAndroid || Platform.isMacOS) _buildPinchToggle(),
             const _Divider(),
-            // 页面缩放：浏览器 Ctrl +/- 式缩放（布局重排）。macOS/iOS
-            // 走 WKWebView 原生 pageZoom（macOS 捏合也调它），Windows
-            // 走根节点 CSS zoom，Android 是系统级字体缩放 textZoom
-            // （字体放大、按新字号重排，fixed 输入框不跑位）。
+            // 缩放组与双指缩放分离：Android 上是字体缩放（textZoom），
+            // +/- 调、百分比复位，只管字体；双指手势缩放的复位在平移
+            // 开关下方的专门按钮。macOS/iOS 是原生整页缩放 pageZoom，
+            // Windows 是 CSS 根缩放。
             _zoomGroup(
               notifier: widget.pageZoom,
               step: 0.25,
               zoomInIcon: Icons.zoom_in,
               zoomOutIcon: Icons.zoom_out,
-              label: '页面缩放',
+              label: Platform.isAndroid ? '字体缩放' : '页面缩放',
             ),
             const _Divider(),
             GlassIconButton(
@@ -582,12 +592,7 @@ class _FloatingDockState extends State<FloatingDock> {
             message: '$label · 点击回到 100%',
             child: InkWell(
               borderRadius: BorderRadius.circular(8),
-              onTap: () async {
-                _setZoom(notifier, 1.0, step);
-                // 两个缩放一起复位：页面/字体缩放 + Android 双指缩放
-                // （resetNativeZoom 仅 Android 生效）。
-                await resetNativeZoom(widget.controller);
-              },
+              onTap: () => _setZoom(notifier, 1.0, step),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
                 child: Text(
