@@ -192,19 +192,13 @@ const String kEnterRemapScript = '''
     e.stopImmediatePropagation();
     e.stopPropagation();
   }, true);
-  // 移动端兜底：软键盘回车若不产生 keydown，页面无从发送，无需处理；
-  // 但有些键盘会直接发 beforeinput(insertParagraph)——若页面也监听
-  // beforeinput 发送，这里同样只止传播保住默认插入。
-  window.addEventListener('beforeinput', function(e) {
-    if (!MOBILE) return;
-    if (e.inputType !== 'insertParagraph') return;
-    if (!e.target || !e.target.closest
-      || !e.target.closest('[contenteditable="true"]')) return;
-    if (e.isComposing) return;
-    if (!findSendButton(e.target.closest('[contenteditable="true"]'))) return;
-    e.stopImmediatePropagation();
-    e.stopPropagation();
-  }, true);
+  // 注意：**不监听 beforeinput**。Lexical 正是靠编辑器上的 beforeinput
+  // 同步内部状态——输入法「整理文本」、语音转写等插入换行时不走
+  // keydown、直接产生 beforeinput，若在这里止住传播，Lexical 收不到，
+  // DOM 与状态失同步，React 重新协调时会把整行文本吞掉（与 v1.4.9
+  // execCommand 吞文本同族）。因此本脚本唯一的干预点就是上面那个
+  // 「干净回车」的 keydown，其余一切输入事件（含输入法的所有文本/
+  // 换行操作）全部放行，交给编辑器自己的管线。
 })();
 ''';
 
