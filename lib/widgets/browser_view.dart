@@ -252,22 +252,33 @@ const String kImeTextRecoverScript = '''
   if (window.__zcodeImeRecover) return;
   window.__zcodeImeRecover = true;
   var lastData = '';
+  var beforeText = null;
   function editor() {
     var a = document.activeElement;
     return a && a.closest ? a.closest('[contenteditable="true"]') : null;
   }
+  window.addEventListener('compositionstart', function() {
+    var ed = editor();
+    beforeText = ed ? (ed.innerText || '') : null;
+  }, true);
   window.addEventListener('compositionupdate', function(e) {
     if (e.data) lastData = e.data;
   }, true);
   window.addEventListener('compositionend', function() {
     var data = lastData;
+    var before = beforeText;
     lastData = '';
-    if (!data) return;
+    beforeText = null;
+    if (!data || before === null) return;
     setTimeout(function() {
       var ed = editor();
       if (!ed || !document.contains(ed)) return;
-      var text = ed.innerText || '';
-      if (text.indexOf(data) >= 0) return; // 文本在，没被吞
+      // 只有「整段被吞」才回填：组合结束后编辑器内容和组合开始前
+      // 一模一样（一个字都没插进去）。编辑器有任何插入——哪怕顺序
+      // 不对（整理文本会被页面重排）——都不碰，避免重复插入导致
+      // 行序错乱（v1.5.3 的判定只查原样包含，重排后匹配不上就误
+      // 补了一次，和已插入内容叠出乱序）。
+      if ((ed.innerText || '') !== before) return;
       try { document.execCommand('insertText', false, data); } catch (err) {}
     }, 100);
   }, true);
