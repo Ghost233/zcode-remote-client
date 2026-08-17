@@ -1,3 +1,7 @@
+## v1.4.0
+
+- **修复 macOS 组词后按回车仍误发消息（v1.3.9 时间窗方向写反）**：用原生 WKWebView + 真实拼音输入法抓包拿到了确切事件序列——提交回车的 keydown 在 compositionend 之后才派发，但其 timeStamp 反而比 compositionend 还早 5ms，v1.3.9 的窗口条件「timeStamp 必须不小于 compositionend」恰好把这种乱序排除在防护外。现改为：① 补上 keyCode===229 判定（真实抓包确认提交回车就是 229）；② 时间窗改双向（|差值|≤30ms）并以真实时钟兜底，30ms 远小于「空格上屏→回车发送」的正常按键间隔，不误拦真正的发送
+
 ## v1.3.9
 
 - **修复 v1.3.8 回车防护仍拦不住的问题**：WebKit 的事件顺序与 Chromium 相反（Bug 165004）——按回车提交输入法组合时，compositionend 先行、那个"isComposing=false 的干净回车"随后才跨任务到达，v1.3.8 沿用的 setTimeout(0) 清标志会被任务边界插队，防护窗口提前关闭。现改为 compositionend 后 100ms 时间窗内一律拦截（业界同类修复的通行做法），另加页面加载完成后的兜底注入（幂等），双重保险

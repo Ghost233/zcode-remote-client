@@ -82,19 +82,27 @@ const String kImeEnterGuardScript = '''
   if (window.__zcodeImeGuard) return;
   window.__zcodeImeGuard = true;
   var composing = false;
-  var endedAt = -1;
+  var endedTs = -1;   // compositionend 的事件 timeStamp
+  var endedWall = -1; // 处理 compositionend 时的真实时钟
   window.addEventListener('compositionstart', function() {
     composing = true;
   }, true);
   window.addEventListener('compositionend', function(e) {
     composing = false;
-    endedAt = e.timeStamp;
+    endedTs = e.timeStamp;
+    endedWall = Date.now();
   }, true);
   function guard(e) {
     if (e.key !== 'Enter' && e.keyCode !== 13) return;
-    var inWindow = endedAt >= 0 && e.timeStamp >= endedAt &&
-        e.timeStamp - endedAt < 100;
-    if (e.isComposing || composing || inWindow) {
+    // 标准信号：组合态 / keyCode 229。
+    // 真机抓包（macOS WKWebView + 拼音）证实：提交回车的 keydown 在
+    // compositionend 之后才派发，但其 timeStamp 反而更早（WebKit
+    // bug 165004 的乱序特征）。所以窗口必须「双向」且用真实时钟兜底；
+    // 30ms 足够覆盖乱序偏差，又远小于正常「空格上屏→回车发送」的
+    // 两次按键间隔，不会误拦真正的发送。
+    var invTs = endedTs >= 0 && Math.abs(e.timeStamp - endedTs) <= 30;
+    var invWall = endedWall >= 0 && Date.now() - endedWall <= 30;
+    if (e.isComposing || e.keyCode === 229 || composing || invTs || invWall) {
       e.stopImmediatePropagation();
       e.stopPropagation();
     }
