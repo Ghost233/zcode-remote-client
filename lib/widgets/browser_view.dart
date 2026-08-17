@@ -140,12 +140,45 @@ const String kAndroidSafeAreaScript = '''
     s.id = 'zcode-safe-area';
     s.textContent = css;
     (document.head || document.documentElement).appendChild(s);
+    paint();
   }
+  // 安全区 padding 露出的是 html（画布）背景，默认白色；页面本体的
+  // 背景往往画在 body 或内层容器上，不会自动延伸过去。这里取页面
+  // 实际背景色刷到 html 上，让顶部/底部露出的区域和内容同色；
+  // 监听 html 的 class 变化（暗色模式切换的常见做法）自动重刷。
+  function opaque(c) {
+    return c && c !== 'transparent' && c !== 'rgba(0, 0, 0, 0)';
+  }
+  function paint() {
+    try {
+      var c = getComputedStyle(document.body).backgroundColor;
+      if (!opaque(c)) {
+        var el = document.body.firstElementChild;
+        while (el) {
+          var cc = getComputedStyle(el).backgroundColor;
+          if (opaque(cc)) { c = cc; break; }
+          el = el.firstElementChild;
+        }
+      }
+      if (opaque(c)) {
+        document.documentElement.style.backgroundColor = c;
+      }
+    } catch (e) {}
+  }
+  window.__zcodeSafeAreaPaint = paint;
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', apply);
   } else {
     apply();
   }
+  new MutationObserver(function() { paint(); }).observe(
+    document.documentElement, { attributes: true, attributeFilter: ['class'] });
+  // SPA 内容后挂载：body 有了带背景的容器后再刷一次（去抖 300ms）。
+  var t = null;
+  new MutationObserver(function() {
+    clearTimeout(t);
+    t = setTimeout(paint, 300);
+  }).observe(document.body, { childList: true });
 })();
 ''';
 
