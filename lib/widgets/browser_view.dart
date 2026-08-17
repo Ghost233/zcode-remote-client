@@ -113,74 +113,37 @@ const String kImeEnterGuardScript = '''
 })();
 ''';
 
-/// Android：安全区适配（挖孔屏状态栏 / 底部手势条）。
-///
-/// edge-to-edge 下 WebView 完全铺满，系统栏悬浮在网页上。规范做法是
-/// 网页层用 CSS `env(safe-area-inset-*)` 自己避让，原生层不加
-/// padding——背景仍铺满全屏，只有内容缩进安全区。
-///
-/// 但 Android WebView 内核不给 env() 填真实值（返回 0，与 Chrome 不同，
-/// 实测挖孔屏无效），所以必须由宿主桥接：Flutter 的 viewPadding 在
-/// edge-to-edge 下由 WindowInsets 驱动、数值可靠，把它写成具体像素的
-/// CSS 变量（--zsatpx 等）注入网页，CSS 里 `max(env(...), 具体值)`
-/// 双保险。第三方页面没写这套 CSS，这里注入兜底；变量也供页面消费。
-const String kAndroidSafeAreaScript = '''
+/// 读取页面实际背景色（body 透明时沿第一个子元素向下找第一个不透明
+/// 背景的容器）。宿主用它把 Android SafeArea 露出的区域刷成与页面
+/// 同色，避免露出 Flutter 默认背景造成色带。
+const String kPageBackgroundScript = '''
 (function() {
-  if (window.__zcodeSafeArea) return;
-  window.__zcodeSafeArea = true;
-  var css = 'html,body{box-sizing:border-box}'
-    + ':root{--zsat:max(env(safe-area-inset-top,0px),var(--zsatpx,0px));'
-    + '--zsab:max(env(safe-area-inset-bottom,0px),var(--zsabpx,0px));'
-    + '--zsal:max(env(safe-area-inset-left,0px),var(--zsalpx,0px));'
-    + '--zsar:max(env(safe-area-inset-right,0px),var(--zsarpx,0px))}'
-    + 'body{padding-top:var(--zsat)!important;padding-bottom:var(--zsab)!important;'
-    + 'padding-left:var(--zsal)!important;padding-right:var(--zsar)!important}';
-  function apply() {
-    var s = document.createElement('style');
-    s.id = 'zcode-safe-area';
-    s.textContent = css;
-    (document.head || document.documentElement).appendChild(s);
-    paint();
-  }
-  // 安全区 padding 露出的是 html（画布）背景，默认白色；页面本体的
-  // 背景往往画在 body 或内层容器上，不会自动延伸过去。这里取页面
-  // 实际背景色刷到 html 上，让顶部/底部露出的区域和内容同色；
-  // 监听 html 的 class 变化（暗色模式切换的常见做法）自动重刷。
   function opaque(c) {
     return c && c !== 'transparent' && c !== 'rgba(0, 0, 0, 0)';
   }
-  function paint() {
-    try {
-      var c = getComputedStyle(document.body).backgroundColor;
-      if (!opaque(c)) {
-        var el = document.body.firstElementChild;
-        while (el) {
-          var cc = getComputedStyle(el).backgroundColor;
-          if (opaque(cc)) { c = cc; break; }
-          el = el.firstElementChild;
-        }
-      }
-      if (opaque(c)) {
-        document.documentElement.style.backgroundColor = c;
-      }
-    } catch (e) {}
+  var el = document.body;
+  while (el) {
+    var c = getComputedStyle(el).backgroundColor;
+    if (opaque(c)) return c;
+    el = el.firstElementChild;
   }
-  window.__zcodeSafeAreaPaint = paint;
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', apply);
-  } else {
-    apply();
-  }
-  new MutationObserver(function() { paint(); }).observe(
-    document.documentElement, { attributes: true, attributeFilter: ['class'] });
-  // SPA 内容后挂载：body 有了带背景的容器后再刷一次（去抖 300ms）。
-  var t = null;
-  new MutationObserver(function() {
-    clearTimeout(t);
-    t = setTimeout(paint, 300);
-  }).observe(document.body, { childList: true });
+  return null;
 })();
 ''';
+
+/// 把 CSS 颜色串（rgb()/rgba()）解析成 Flutter Color，失败返回 null。
+Color? parseCssColor(String css) {
+  final m = RegExp(
+    r'rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)',
+  ).firstMatch(css);
+  if (m == null) return null;
+  return Color.fromARGB(
+    ((double.tryParse(m.group(4) ?? '1') ?? 1) * 255).round().clamp(0, 255),
+    int.parse(m.group(1)!).clamp(0, 255),
+    int.parse(m.group(2)!).clamp(0, 255),
+    int.parse(m.group(3)!).clamp(0, 255),
+  );
+}
 
 /// Android：把 WebView 原生（双指）缩放复位到 100%。
 ///
@@ -206,6 +169,7 @@ class BrowserView extends StatefulWidget {
     super.key,
     required this.device,
     required this.pageZoom,
+    required this.pageBackground,
     required this.onControllerReady,
     required this.onTitleChanged,
     required this.onReplaceAddress,
@@ -215,6 +179,10 @@ class BrowserView extends StatefulWidget {
 
   /// 页面缩放（1.0 = 100%）：浏览器 Ctrl +/- 式整页缩放，布局会重排。
   final ValueNotifier<double> pageZoom;
+
+  /// 页面实际背景色（加载后从网页读取）：宿主用它把 Android SafeArea
+  /// 露出的区域刷成与页面同色，并据此定状态栏图标亮暗。
+  final ValueNotifier<Color> pageBackground;
 
   final void Function(InAppWebViewController controller) onControllerReady;
   final void Function(String title) onTitleChanged;
@@ -635,37 +603,23 @@ class BrowserViewState extends State<BrowserView>
 
   // ---------- 构建 ----------
 
-  /// 最近一次桥接给网页的 Android 安全区 inset（逻辑像素），
-  /// 变化时（旋转、折叠、挖孔姿态变化）重新下发。
-  EdgeInsets? _lastPushedInsets;
-
-  /// Android 安全区桥接：把 Flutter 层的真实系统栏 inset 写成具体
-  /// 像素的 CSS 变量注入网页（WebView 内核的 env() 返回 0，靠不住）。
-  /// 用 viewPadding 而非 padding：键盘弹出时 viewPadding 不变，
-  /// 不会给网页底部凭空加一条 padding。
-  void _pushAndroidInsets() {
-    if (!Platform.isAndroid) return;
-    final controller = _controller;
-    if (controller == null) return;
-    final insets = MediaQuery.maybeViewPaddingOf(context);
-    if (insets == null || insets == _lastPushedInsets) return;
-    _lastPushedInsets = insets;
-    controller.evaluateJavascript(source: '''
-(function() {
-  var r = document.documentElement;
-  r.style.setProperty('--zsatpx', '${insets.top}px');
-  r.style.setProperty('--zsabpx', '${insets.bottom}px');
-  r.style.setProperty('--zsalpx', '${insets.left}px');
-  r.style.setProperty('--zsarpx', '${insets.right}px');
-})();
-''');
+  /// 读取页面实际背景色并上报给宿主（SafeArea 露出区域同色 + 状态栏
+  /// 图标亮暗依据）。失败静默：保留上次值即可。
+  Future<void> _readPageBackground(InAppWebViewController controller) async {
+    try {
+      final result = await controller.evaluateJavascript(
+        source: kPageBackgroundScript,
+      );
+      if (result is String) {
+        final color = parseCssColor(result);
+        if (color != null) widget.pageBackground.value = color;
+      }
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    // MediaQuery 依赖：inset 变化触发重建，这里把新值桥接给网页。
-    _pushAndroidInsets();
     // 桌面模式是"创建时"快照：UA / 原生 contentMode / 视口脚本都只能随
     // WebView 重建生效，切换开关时由外部重建当前会话。
     final desktopMode = context.watch<DeviceStore>().desktopMode;
@@ -676,18 +630,12 @@ class BrowserViewState extends State<BrowserView>
           // 设置快照是唯一权威来源（创建时带上缩放初值；运行期改设置
           // 也改这份再下发，见 _settingsSnapshot）。
           initialSettings: _settingsSnapshot(desktopMode),
-          // 组合态回车防护常驻注入；Android 追加安全区 CSS 兜底；
-          // 桌面模式追加视口脚本。
+          // 组合态回车防护常驻注入；桌面模式追加视口脚本。
           initialUserScripts: UnmodifiableListView([
             UserScript(
               source: kImeEnterGuardScript,
               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
             ),
-            if (Platform.isAndroid)
-              UserScript(
-                source: kAndroidSafeAreaScript,
-                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-              ),
             if (desktopMode)
               UserScript(
                 source: kDesktopViewportScript,
@@ -736,14 +684,12 @@ class BrowserViewState extends State<BrowserView>
             // 兜底再装一次回车防护：脚本自带幂等标志，正常路径
             // AT_DOCUMENT_START 已装上，这里只防注入时序异常。
             await controller.evaluateJavascript(source: kImeEnterGuardScript);
-            if (Platform.isAndroid) {
-              await controller.evaluateJavascript(
-                source: kAndroidSafeAreaScript,
-              );
-              // 新文档会丢 root 上的内联变量，重桥接一次 inset。
-              _lastPushedInsets = null;
-              _pushAndroidInsets();
-            }
+            // 读取页面实际背景色：宿主用它把 Android SafeArea 露出的
+            // 区域刷成与页面同色。SPA 可能稍后才挂内容，延迟再取一次。
+            _readPageBackground(controller);
+            Future.delayed(const Duration(milliseconds: 800), () {
+              if (mounted) _readPageBackground(controller);
+            });
           },
           onProgressChanged: (controller, progress) {
             setState(() => _progress = progress / 100);

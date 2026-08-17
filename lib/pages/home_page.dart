@@ -1,5 +1,6 @@
 
 
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -35,6 +36,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final Map<String, InAppWebViewController> _controllers = {};
   final Map<String, ValueNotifier<double>> _pageZooms = {};
   final Map<String, GlobalKey> _viewKeys = {};
+
+  /// 当前会话的页面实际背景色（从网页读取）。Android 上 SafeArea 露出
+  /// 的区域刷成这个颜色（默认近黑，贴合 zcode 深色界面），状态栏图标
+  /// 亮暗也随它走。
+  final ValueNotifier<Color> _pageBg =
+      ValueNotifier(const Color(0xFF171717));
 
   /// 是否已做过启动自动恢复（只恢复一次，之后由用户操作驱动）。
   bool _autoOpened = false;
@@ -77,6 +84,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     for (final z in _pageZooms.values) {
       z.dispose();
     }
+    _pageBg.dispose();
     super.dispose();
   }
 
@@ -167,7 +175,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   SystemUiOverlayStyle _systemOverlayStyle(Brightness brightness) {
-    final dark = brightness == Brightness.dark;
+    // 深浅判定优先跟页面实际背景色（近黑页面配浅色图标），没有页面
+    // 数据时退回系统主题。
+    final bgLuminance = _pageBg.value.computeLuminance();
+    final dark =
+        _openIds.isNotEmpty ? bgLuminance < 0.5 : brightness == Brightness.dark;
     return SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       // Android 状态栏图标颜色
@@ -200,13 +212,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
     }
 
-    // 安全区策略（v1.4.1 起）：网页层全平台完全铺满，不再用 SafeArea 裁剪。
-    // - iOS：WKWebView 原生自动内缩（contentInsetAdjustment AUTOMATIC），
+    // 安全区策略（v1.4.5 起）：
+    // - iOS：网页层完全铺满，WKWebView 原生自动内缩（AUTOMATIC），
     //   内容避让刘海/Home Indicator，背景延伸到全屏（Safari 同款）
-    // - Android：edge-to-edge 下注入 env(safe-area-inset-*) CSS，
-    //   由网页层自己避让状态栏/手势条
-    // 旧方案「SafeArea 裁 WebView」裁掉的是整个 WebView（含背景），
-    // 顶部会留一条系统栏色块，且第三方页面没写 env() CSS，等于没人处理。
+    // - Android：SafeArea 裁出安全区（页面视口=可视区，100% 布局不会再
+    //   溢出屏幕），露出区域刷成页面实际背景色（WebView 里读出来的），
+    //   不会再露白；状态栏图标亮暗也跟背景色走
+    // （曾试过给网页注入安全区 padding 的方案：与页面自身 100vh 满高
+    //  布局冲突，底部内容被挤出屏幕，废弃。）
+    final webLayer = ValueListenableBuilder(
+      valueListenable: _pageBg,
+      builder: (context, Color bg, _) => ColoredBox(
+        color: Platform.isAndroid ? bg : Colors.transparent,
+        child: _openIds.isNotEmpty
+            ? IndexedStack(
+                index: currentIndex >= 0 ? currentIndex : 0,
+                children: [
+                  for (final id in _openIds) _buildBrowser(store, id),
+                ],
+              )
+            : _buildEmptyState(store),
+      ),
+    );
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -219,15 +246,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           resizeToAvoidBottomInset: true,
           body: Stack(
             children: [
-              // 网页层：各设备会话保活（完全铺满，见上方安全区策略注释）
-              _openIds.isNotEmpty
-                  ? IndexedStack(
-                      index: currentIndex >= 0 ? currentIndex : 0,
-                      children: [
-                        for (final id in _openIds) _buildBrowser(store, id),
-                      ],
-                    )
-                  : _buildEmptyState(store),
+              // 网页层：各设备会话保活（Android 避让安全区，见上方注释）
+              Platform.isAndroid
+                  ? SafeArea(child: webLayer)
+                  : webLayer,
 
               // 悬浮控制栏（悬浮球+工具栏二合一）：默认右边缘收起为球，
               // 点击展开；可拖动吸附两侧，位置持久化；始终避让系统栏。
@@ -298,6 +320,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       key: _viewKeys[id],
       device: device,
       pageZoom: _pageZooms[id]!,
+      pageBackground: _pageBg,
       onControllerReady: (controller) {
         _controllers[id] = controller;
         // controller 就绪后必须重建一次，否则工具栏的导航/刷新按钮
