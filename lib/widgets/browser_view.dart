@@ -113,23 +113,25 @@ const String kImeEnterGuardScript = '''
 })();
 ''';
 
-/// Enter 重映射——裸 Enter 插入换行（不再发送），桌面 Cmd/Ctrl+Enter
+/// Enter 重映射——裸 Enter 换行（不再发送），桌面 Cmd/Ctrl+Enter
 /// 发送。全平台注入。
 ///
-/// 原理：keydown 捕获阶段 preventDefault 掉干净回车（页面收不到、
-/// Lexical 也不会分新段落），再用 execCommand('insertLineBreak') 走
-/// beforeinput 管线插入换行——Lexical 原生支持该输入类型，撤销栈
-/// 正常。
+/// 核心思路：**不 preventDefault、不手动插内容**。回车键在
+/// contenteditable 里的原生默认行为本来就是插入新段落/换行；页面
+/// 之所以发送，是它自己的 keydown 监听 preventDefault 掉了默认行为。
+/// 我们在 window 捕获阶段（注入早于页面脚本，先注册先执行）把事件
+/// 止住传播——页面收不到、不会发送也不会 preventDefault——默认行为
+/// 自然发生，Lexical 按它自己的正常管线插入段落，React 状态零风险。
+/// （v1.4.9 曾用 execCommand 手动插换行，与 Lexical/React 状态同步
+/// 冲突导致整行文本消失，废弃。）
 ///
-/// 监听必须挂 **window** 捕获阶段：挂在 document 上的话，页面若把
-/// 自己的 keydown 监听也挂 window 捕获，它会先于 document 执行、
-/// 直接发送，我们拦不到（v1.4.7 在真机上拦不住的原因）。挂 window
-/// 且我们注入早于页面脚本注册，先到先执行；配合
-/// stopImmediatePropagation 压住后注册的同层监听。
+/// 监听必须挂 **window** 捕获：挂在 document 上的话，页面若把回车
+/// 监听也挂 window 捕获，它会先于 document 执行、直接发送（v1.4.7
+/// 拦不住的原因）。stopImmediatePropagation 压住后注册的同层监听。
 ///
 /// 输入法安全：229 / isComposing 的组合态回车一律放行（与
 /// kImeEnterGuardScript 叠加无冲突）。移动端兜底：软键盘没有组合键，
-/// 改成换行后只能靠页面发送按钮发送——找不到按钮时不拦截换行键，
+/// 换行后只能靠页面发送按钮发送——找不到按钮时不拦截回车，
 /// 保持原生「回车即发送」，保证消息永远发得出去。
 const String kEnterRemapScript = '''
 (function() {
@@ -137,6 +139,8 @@ const String kEnterRemapScript = '''
   window.__zcodeEnterRemap = true;
   var MAC = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   var MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  // 重放合成 Enter（发送兜底）时置 true，让自己的监听放行这一次
+  var passthrough = false;
   function findSendButton(ed) {
     var scope = ed;
     for (var i = 0; i < 4 && scope; i++) {
@@ -151,31 +155,31 @@ const String kEnterRemapScript = '''
     }
     return null;
   }
-  function insertLineBreak() {
-    var ok = false;
-    try { ok = document.execCommand('insertLineBreak'); } catch (err) {}
-    if (!ok) {
-      try { document.execCommand('insertText', false, '\\n'); } catch (err) {}
-    }
-  }
   window.addEventListener('keydown', function(e) {
     if (e.key !== 'Enter') return;
+    if (passthrough) return;
     // 输入法组合态回车放行（提交候选的原生行为）
     if (e.isComposing || e.keyCode === 229) return;
     var ed = e.target && e.target.closest
       ? e.target.closest('[contenteditable="true"]') : null;
     if (!ed) return;
     if (MAC ? e.metaKey : e.ctrlKey) {
-      // 发送：优先点页面按钮，没有就重放干净 Enter 交给页面逻辑
+      // 发送：拦掉默认（避免多发一个换行），优先点页面按钮，
+      // 没有就重放干净 Enter 交给页面自己的发送逻辑
       e.preventDefault();
       e.stopImmediatePropagation();
       var b = findSendButton(ed);
       if (b) {
         b.click();
       } else {
-        ed.dispatchEvent(new KeyboardEvent('keydown',
-          {key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
-           bubbles: true, cancelable: true}));
+        passthrough = true;
+        try {
+          ed.dispatchEvent(new KeyboardEvent('keydown',
+            {key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+             bubbles: true, cancelable: true}));
+        } finally {
+          passthrough = false;
+        }
       }
       return;
     }
@@ -183,13 +187,14 @@ const String kEnterRemapScript = '''
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     // 移动端找不到发送按钮就不拦：保持原生回车发送，保证能发出去
     if (MOBILE && !findSendButton(ed)) return;
-    // 裸 Enter / Shift+Enter：插入换行
-    e.preventDefault();
+    // 裸 Enter / Shift+Enter → 换行：只止传播，不碰默认行为。
+    // 页面收不到（不发送、不 preventDefault），浏览器原生插入换行。
     e.stopImmediatePropagation();
-    insertLineBreak();
+    e.stopPropagation();
   }, true);
-  // 移动端兜底路径：软键盘回车常不产生可拦截的 keydown，改在
-  // beforeinput 层拦 insertParagraph（Lexical 靠它分新段落 = 发送）
+  // 移动端兜底：软键盘回车若不产生 keydown，页面无从发送，无需处理；
+  // 但有些键盘会直接发 beforeinput(insertParagraph)——若页面也监听
+  // beforeinput 发送，这里同样只止传播保住默认插入。
   window.addEventListener('beforeinput', function(e) {
     if (!MOBILE) return;
     if (e.inputType !== 'insertParagraph') return;
@@ -197,8 +202,8 @@ const String kEnterRemapScript = '''
       || !e.target.closest('[contenteditable="true"]')) return;
     if (e.isComposing) return;
     if (!findSendButton(e.target.closest('[contenteditable="true"]'))) return;
-    e.preventDefault();
-    insertLineBreak();
+    e.stopImmediatePropagation();
+    e.stopPropagation();
   }, true);
 })();
 ''';
