@@ -113,6 +113,72 @@ const String kImeEnterGuardScript = '''
 })();
 ''';
 
+/// 桌面平台（macOS/Windows）：Enter 重映射——裸 Enter 插入换行（不再
+/// 发送），Cmd/Ctrl+Enter 发送。手机平台不注入（软键盘没有组合键，
+/// Enter 保持直接发送）。
+///
+/// 原理：keydown 捕获阶段 preventDefault 掉干净回车（页面收不到、
+/// Lexical 也不会分新段落），再用 execCommand('insertLineBreak') 走
+/// beforeinput 管线插入换行——Lexical 原生支持该输入类型，撤销栈
+/// 正常。输入法安全：229 / isComposing 的组合态回车一律放行（与
+/// kImeEnterGuardScript 叠加无冲突，防护先拦组合态，这里只见干净
+/// 回车）。发送优先点页面上「发送/Send」按钮（从编辑器向上找），
+/// 找不到就向编辑器重放一个合成 Enter 交给页面自身逻辑。
+const String kEnterRemapScript = '''
+(function() {
+  if (window.__zcodeEnterRemap) return;
+  window.__zcodeEnterRemap = true;
+  var MAC = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+  function findSendButton(ed) {
+    var scope = ed;
+    for (var i = 0; i < 4 && scope; i++) {
+      var btns = scope.querySelectorAll('button, [role="button"]');
+      for (var j = 0; j < btns.length; j++) {
+        var b = btns[j];
+        var txt = ((b.textContent || '') + ' ' +
+          (b.getAttribute('aria-label') || '')).trim();
+        if (/发送|send/i.test(txt)) return b;
+      }
+      scope = scope.parentElement;
+    }
+    return null;
+  }
+  document.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter') return;
+    // 输入法组合态回车放行（提交候选的原生行为）
+    if (e.isComposing || e.keyCode === 229) return;
+    var ed = e.target && e.target.closest
+      ? e.target.closest('[contenteditable="true"]') : null;
+    if (!ed) return;
+    var send = MAC ? e.metaKey : e.ctrlKey;
+    if (send) {
+      e.preventDefault();
+      e.stopPropagation();
+      var b = findSendButton(ed);
+      if (b) {
+        b.click();
+      } else {
+        // 没有独立发送按钮：重放一个干净 Enter 交给页面发送逻辑
+        ed.dispatchEvent(new KeyboardEvent('keydown',
+          {key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+           bubbles: true, cancelable: true}));
+      }
+      return;
+    }
+    // 其他修饰键组合（如 Alt+Enter）不碰
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // 裸 Enter / Shift+Enter：插入换行
+    e.preventDefault();
+    e.stopPropagation();
+    var ok = false;
+    try { ok = document.execCommand('insertLineBreak'); } catch (err) {}
+    if (!ok) {
+      try { document.execCommand('insertText', false, '\\n'); } catch (err) {}
+    }
+  }, true);
+})();
+''';
+
 /// 读取页面实际背景色（body 透明时沿第一个子元素向下找第一个不透明
 /// 背景的容器）。宿主用它把 Android SafeArea 露出的区域刷成与页面
 /// 同色，避免露出 Flutter 默认背景造成色带。
@@ -630,12 +696,18 @@ class BrowserViewState extends State<BrowserView>
           // 设置快照是唯一权威来源（创建时带上缩放初值；运行期改设置
           // 也改这份再下发，见 _settingsSnapshot）。
           initialSettings: _settingsSnapshot(desktopMode),
-          // 组合态回车防护常驻注入；桌面模式追加视口脚本。
+          // 组合态回车防护常驻注入；桌面平台追加 Enter 重映射（换行/
+          // Cmd+Ctrl 发送）；桌面模式追加视口脚本。
           initialUserScripts: UnmodifiableListView([
             UserScript(
               source: kImeEnterGuardScript,
               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
             ),
+            if (!Platform.isAndroid && !Platform.isIOS)
+              UserScript(
+                source: kEnterRemapScript,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              ),
             if (desktopMode)
               UserScript(
                 source: kDesktopViewportScript,
@@ -684,6 +756,9 @@ class BrowserViewState extends State<BrowserView>
             // 兜底再装一次回车防护：脚本自带幂等标志，正常路径
             // AT_DOCUMENT_START 已装上，这里只防注入时序异常。
             await controller.evaluateJavascript(source: kImeEnterGuardScript);
+            if (!Platform.isAndroid && !Platform.isIOS) {
+              await controller.evaluateJavascript(source: kEnterRemapScript);
+            }
             // 读取页面实际背景色：宿主用它把 Android SafeArea 露出的
             // 区域刷成与页面同色。SPA 可能稍后才挂内容，延迟再取一次。
             _readPageBackground(controller);
