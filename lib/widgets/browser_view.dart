@@ -70,13 +70,13 @@ const String kDesktopViewportScript = '''
 /// 一按回车整句被"发送"出去。
 ///
 /// 处理：文档开始即在 window 捕获阶段拦截组合态的 Enter（keydown/
-/// keypress/keyup），不让页面监听器收到。判定"组合态"用三个条件：
-/// e.isComposing、组合进行中标志、以及 compositionend 后 100ms 内
-/// （覆盖顺序颠倒 + 跨任务迟到的提交回车；v1.1.3~v1.3.8 用的
-/// setTimeout(0) 清标志会被任务边界插队，正是拦不住的原因，业界
-/// 同类修复也用时间窗）。不 preventDefault——组合的提交由输入法在
-/// 原生层完成（macOS 拼音：回车落选上屏原始字母），行为与 Edge
-/// 对齐。候选窗内按回车选词不会到达页面，不受影响。
+/// keypress/keyup），不让页面监听器收到。判定"组合态"用三组条件：
+/// e.isComposing / keyCode 229 / 组合进行中标志；再加双向 30ms 时间窗
+/// （真机抓包证实 WebKit bug 165004 乱序：提交回车 keydown 的
+/// timeStamp 反而早于 compositionend，窗口必须取绝对值），真实时钟
+/// 兜底。不 preventDefault——组合的提交由输入法在原生层完成（macOS
+/// 拼音：回车落选上屏原始字母），行为与 Edge 对齐。候选窗内按回车
+/// 选词不会到达页面，不受影响。
 const String kImeEnterGuardScript = '''
 (function() {
   if (window.__zcodeImeGuard) return;
@@ -110,6 +110,37 @@ const String kImeEnterGuardScript = '''
   window.addEventListener('keydown', guard, true);
   window.addEventListener('keypress', guard, true);
   window.addEventListener('keyup', guard, true);
+})();
+''';
+
+/// Android：安全区适配（刘海屏状态栏 / 底部手势条）。
+///
+/// edge-to-edge 下 WebView 完全铺满，系统栏悬浮在网页上。规范做法是
+/// 网页层用 CSS `env(safe-area-inset-*)` 自己避让（Android WebView
+/// 内核原生支持），原生层不加 padding——背景仍铺满全屏，只有内容
+/// 缩进安全区。第三方页面没写这套 CSS，这里注入兜底；同时把值挂在
+/// CSS 变量上，页面自己的样式也可以消费。
+const String kAndroidSafeAreaScript = '''
+(function() {
+  if (window.__zcodeSafeArea) return;
+  window.__zcodeSafeArea = true;
+  var css = ':root{--zsat:env(safe-area-inset-top,0px);'
+    + '--zsab:env(safe-area-inset-bottom,0px);'
+    + '--zsal:env(safe-area-inset-left,0px);'
+    + '--zsar:env(safe-area-inset-right,0px)}'
+    + 'body{padding-top:var(--zsat)!important;padding-bottom:var(--zsab)!important;'
+    + 'padding-left:var(--zsal)!important;padding-right:var(--zsar)!important}';
+  function apply() {
+    var s = document.createElement('style');
+    s.id = 'zcode-safe-area';
+    s.textContent = css;
+    (document.head || document.documentElement).appendChild(s);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', apply);
+  } else {
+    apply();
+  }
 })();
 ''';
 
@@ -202,6 +233,12 @@ class BrowserViewState extends State<BrowserView>
         // 字体缩放 textZoom（两者互不相干，各平台实现只认自己的键）。
         pageZoom: widget.pageZoom.value,
         textZoom: (widget.pageZoom.value * 100).round(),
+        // iOS 安全区：交给 WKWebView 原生自动内缩（Safari 同款行为），
+        // 滚动内容避开刘海/灵动岛/Home Indicator，背景仍铺满全屏。
+        // 插件默认 NEVER 是旧方案失效的根源之一。
+        contentInsetAdjustmentBehavior:
+            ScrollViewContentInsetAdjustmentBehavior.AUTOMATIC,
+        automaticallyAdjustsScrollIndicatorInsets: true,
       );
 
   /// 平移（抓手）模式开关，工具栏读取/切换。
@@ -573,12 +610,18 @@ class BrowserViewState extends State<BrowserView>
           // 设置快照是唯一权威来源（创建时带上缩放初值；运行期改设置
           // 也改这份再下发，见 _settingsSnapshot）。
           initialSettings: _settingsSnapshot(desktopMode),
-          // 组合态回车防护常驻注入（v1.1.3 原版）；桌面模式追加视口脚本。
+          // 组合态回车防护常驻注入；Android 追加安全区 CSS 兜底；
+          // 桌面模式追加视口脚本。
           initialUserScripts: UnmodifiableListView([
             UserScript(
               source: kImeEnterGuardScript,
               injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
             ),
+            if (Platform.isAndroid)
+              UserScript(
+                source: kAndroidSafeAreaScript,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              ),
             if (desktopMode)
               UserScript(
                 source: kDesktopViewportScript,
@@ -627,6 +670,11 @@ class BrowserViewState extends State<BrowserView>
             // 兜底再装一次回车防护：脚本自带幂等标志，正常路径
             // AT_DOCUMENT_START 已装上，这里只防注入时序异常。
             await controller.evaluateJavascript(source: kImeEnterGuardScript);
+            if (Platform.isAndroid) {
+              await controller.evaluateJavascript(
+                source: kAndroidSafeAreaScript,
+              );
+            }
           },
           onProgressChanged: (controller, progress) {
             setState(() => _progress = progress / 100);

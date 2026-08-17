@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -200,10 +200,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
     }
 
-    // Android edge-to-edge：网页层完全铺满，不做系统栏避让（否则状态栏
-    // 区域会显出一条留白）；iOS 保持避让刘海/灵动岛与底部手势区。
-    final webSafeArea = !Platform.isAndroid;
-
+    // 安全区策略（v1.4.1 起）：网页层全平台完全铺满，不再用 SafeArea 裁剪。
+    // - iOS：WKWebView 原生自动内缩（contentInsetAdjustment AUTOMATIC），
+    //   内容避让刘海/Home Indicator，背景延伸到全屏（Safari 同款）
+    // - Android：edge-to-edge 下注入 env(safe-area-inset-*) CSS，
+    //   由网页层自己避让状态栏/手势条
+    // 旧方案「SafeArea 裁 WebView」裁掉的是整个 WebView（含背景），
+    // 顶部会留一条系统栏色块，且第三方页面没写 env() CSS，等于没人处理。
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -216,21 +219,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           resizeToAvoidBottomInset: true,
           body: Stack(
             children: [
-              // 网页层：各设备会话保活
-              SafeArea(
-                top: webSafeArea,
-                bottom: webSafeArea,
-                left: webSafeArea,
-                right: webSafeArea,
-                child: _openIds.isNotEmpty
-                    ? IndexedStack(
-                        index: currentIndex >= 0 ? currentIndex : 0,
-                        children: [
-                          for (final id in _openIds) _buildBrowser(store, id),
-                        ],
-                      )
-                    : _buildEmptyState(store),
-              ),
+              // 网页层：各设备会话保活（完全铺满，见上方安全区策略注释）
+              _openIds.isNotEmpty
+                  ? IndexedStack(
+                      index: currentIndex >= 0 ? currentIndex : 0,
+                      children: [
+                        for (final id in _openIds) _buildBrowser(store, id),
+                      ],
+                    )
+                  : _buildEmptyState(store),
 
               // 悬浮控制栏（悬浮球+工具栏二合一）：默认右边缘收起为球，
               // 点击展开；可拖动吸附两侧，位置持久化；始终避让系统栏。

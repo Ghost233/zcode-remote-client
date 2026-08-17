@@ -1,3 +1,10 @@
+## v1.4.1
+
+- **重做 iOS / Android 刘海屏与底部手势条的安全区适配**（旧方案无效的根源：iOS 上插件默认关闭了 WKWebView 的自动安全区内缩，第三方网页又没写 `env(safe-area-inset-*)`，两边都没人处理；Android edge-to-edge 下则完全没人管）。现按浏览器规范做法重做：
+  - 网页层全平台完全铺满全屏（背景延伸到刘海和手势条下方，不再有 SafeArea 裁出的色块）
+  - **iOS**：开启 WKWebView 原生自动内缩（Safari 同款行为），滚动内容自动避让刘海/灵动岛/Home Indicator，滚动条同步避让
+  - **Android**：注入 `env(safe-area-inset-*)` CSS（WebView 内核原生支持），网页内容自动避让状态栏/手势条，同时把值挂到 CSS 变量（`--zsat/--zsab/--zsal/--zsar`）供页面消费；页面加载完成后兜底重注入
+
 ## v1.4.0
 
 - **修复 macOS 组词后按回车仍误发消息（v1.3.9 时间窗方向写反）**：用原生 WKWebView + 真实拼音输入法抓包拿到了确切事件序列——提交回车的 keydown 在 compositionend 之后才派发，但其 timeStamp 反而比 compositionend 还早 5ms，v1.3.9 的窗口条件「timeStamp 必须不小于 compositionend」恰好把这种乱序排除在防护外。现改为：① 补上 keyCode===229 判定（真实抓包确认提交回车就是 229）；② 时间窗改双向（|差值|≤30ms）并以真实时钟兜底，30ms 远小于「空格上屏→回车发送」的正常按键间隔，不误拦真正的发送
