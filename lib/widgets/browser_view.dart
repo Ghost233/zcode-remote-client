@@ -58,38 +58,43 @@ const String kDesktopViewportScript = '''
 })();
 ''';
 
-/// 输入法组合态回车保护（v1.1.3 原版，v1.3.8 还原）。
+/// 输入法组合态回车保护（v1.3.9 修订版）。
 ///
 /// 中文等输入法组词过程中按回车：Chromium（Edge/Chrome）给页面的
 /// keydown 是 keyCode=229 且会消费掉提交组合的那次回车，页面收不到；
-/// 而 WKWebView（本 app 的 macOS/iOS 内核）会派发 keyCode=13 的正常
-/// 回车，页面按 Chromium 惯例写的防御（只认 229）就失效了——组词途中
+/// 而 WKWebView（本 app 的 macOS/iOS 内核）有两个反常（WebKit
+/// Bug 165004）：一是会派发 keyCode=13 的正常回车，二是事件顺序
+/// 颠倒——compositionend 先行，提交组合的那次 keydown 随后才到，
+/// 且 isComposing=false，像个完全"干净"的回车。页面按 Chromium
+/// 惯例写的防御（只认 229/isComposing）因此全部失效——组词途中
 /// 一按回车整句被"发送"出去。
 ///
 /// 处理：文档开始即在 window 捕获阶段拦截组合态的 Enter（keydown/
-/// keypress/keyup），不让页面监听器收到；不 preventDefault——组合的
-/// 提交由输入法在原生层完成（macOS 拼音：回车落选上屏原始字母），
-/// 行为与 Edge 对齐。候选窗内按回车选词不会到达页面，不受影响。
-///
-/// v1.2.6~v1.3.5 曾把它撤下用于排查 macOS 首字输入问题，最终定案
-/// 根因是 CI 重签名丢沙盒授权（v1.3.6 修复），与这份脚本无关，
-/// 按原样加回。
+/// keypress/keyup），不让页面监听器收到。判定"组合态"用三个条件：
+/// e.isComposing、组合进行中标志、以及 compositionend 后 100ms 内
+/// （覆盖顺序颠倒 + 跨任务迟到的提交回车；v1.1.3~v1.3.8 用的
+/// setTimeout(0) 清标志会被任务边界插队，正是拦不住的原因，业界
+/// 同类修复也用时间窗）。不 preventDefault——组合的提交由输入法在
+/// 原生层完成（macOS 拼音：回车落选上屏原始字母），行为与 Edge
+/// 对齐。候选窗内按回车选词不会到达页面，不受影响。
 const String kImeEnterGuardScript = '''
 (function() {
   if (window.__zcodeImeGuard) return;
   window.__zcodeImeGuard = true;
   var composing = false;
+  var endedAt = -1;
   window.addEventListener('compositionstart', function() {
     composing = true;
   }, true);
-  window.addEventListener('compositionend', function() {
-    // compositionend 与触发它的 keydown 的先后顺序各引擎不同，
-    // 延一拍再放行，保证"提交组合的那次回车"仍被拦截。
-    setTimeout(function() { composing = false; }, 0);
+  window.addEventListener('compositionend', function(e) {
+    composing = false;
+    endedAt = e.timeStamp;
   }, true);
   function guard(e) {
     if (e.key !== 'Enter' && e.keyCode !== 13) return;
-    if (e.isComposing || composing) {
+    var inWindow = endedAt >= 0 && e.timeStamp >= endedAt &&
+        e.timeStamp - endedAt < 100;
+    if (e.isComposing || composing || inWindow) {
       e.stopImmediatePropagation();
       e.stopPropagation();
     }
@@ -611,6 +616,9 @@ class BrowserViewState extends State<BrowserView>
             if (Platform.isWindows) await _applyPageZoom();
             // 新文档会清掉注入的拖拽层，平移模式开着的话重新注入。
             if (panMode.value) await _injectPanLayer(controller);
+            // 兜底再装一次回车防护：脚本自带幂等标志，正常路径
+            // AT_DOCUMENT_START 已装上，这里只防注入时序异常。
+            await controller.evaluateJavascript(source: kImeEnterGuardScript);
           },
           onProgressChanged: (controller, progress) {
             setState(() => _progress = progress / 100);
