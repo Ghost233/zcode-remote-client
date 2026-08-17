@@ -1,6 +1,8 @@
 
 
 import 'dart:io' show Platform;
+
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -15,6 +17,7 @@ import '../widgets/device_edit_sheet.dart';
 import '../widgets/device_switcher_sheet.dart';
 import '../widgets/floating_dock.dart';
 import '../widgets/glass.dart';
+import '../widgets/session_tab_bar.dart';
 import '../widgets/update_dialog.dart';
 import 'settings_page.dart';
 
@@ -234,6 +237,38 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             : _buildEmptyState(store),
       ),
     );
+
+    // 顶栏会话页签：浏览器风格的 tab 条。Android 上放在 SafeArea 内、
+    // 网页层之上（竖向占位，不遮内容）；iOS 上悬浮在安全区内顶部。
+    final tabBar = _openIds.isNotEmpty
+        ? SessionTabBar(
+            tabs: [
+              for (final id in _openIds)
+                SessionTab(id: id, label: _tabLabel(store, id)),
+            ],
+            activeId: currentId,
+            onSelect: (id) {
+              final device = store.devices.firstWhereOrNull((d) => d.id == id);
+              if (device != null) _selectDevice(device);
+            },
+            onClose: (id) {
+              final device = store.devices.firstWhereOrNull((d) => d.id == id);
+              if (device != null) _closeSession(device);
+            },
+            onAdd: () => DeviceSwitcherSheet.show(
+              context,
+              openIds: _openIds.toSet(),
+              onSelect: _selectDevice,
+              onCloseSession: _closeSession,
+              onOpenSettings: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const SettingsPage()),
+                );
+              },
+            ),
+          )
+        : null;
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -248,8 +283,32 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             children: [
               // 网页层：各设备会话保活（Android 避让安全区，见上方注释）
               Platform.isAndroid
-                  ? SafeArea(child: webLayer)
+                  ? SafeArea(
+                      child: tabBar != null
+                          ? Column(
+                              children: [
+                                tabBar,
+                                Expanded(child: webLayer),
+                              ],
+                            )
+                          : webLayer,
+                    )
                   : webLayer,
+
+              // iOS：tab 条悬浮在安全区顶部，网页层保持全屏原生内缩
+              if (tabBar != null && !Platform.isAndroid)
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: SafeArea(
+                    top: true,
+                    bottom: false,
+                    left: false,
+                    right: false,
+                    child: tabBar,
+                  ),
+                ),
 
               // 悬浮控制栏（悬浮球+工具栏二合一）：默认右边缘收起为球，
               // 点击展开；可拖动吸附两侧，位置持久化；始终避让系统栏。
@@ -333,6 +392,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           context.read<DeviceStore>().maybeFillRemarkFromTitle(id, title),
       onReplaceAddress: () => DeviceEditSheet.show(context, editing: device),
     );
+  }
+
+  /// 页签标题：备注优先，没有备注用 URL 主机名兜底（URL 含凭证，
+  /// 绝不能整串上屏）。
+  String _tabLabel(DeviceStore store, String id) {
+    final device = store.devices.firstWhereOrNull((d) => d.id == id);
+    final remark = device?.remark;
+    if (remark != null && remark.isNotEmpty) return remark;
+    final url = device?.url ?? '';
+    final host = Uri.tryParse(url)?.host;
+    return (host != null && host.isNotEmpty) ? host : '会话';
   }
 
   Widget _buildEmptyState(DeviceStore store) {
