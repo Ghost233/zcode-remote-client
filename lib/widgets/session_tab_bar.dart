@@ -1,4 +1,6 @@
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import 'glass.dart';
@@ -16,8 +18,9 @@ class SessionTab {
 /// 玻璃材质横条。单屏时钉在页面最顶部（避让状态栏）；分屏时左右
 /// 窗格顶部各有一条，各自切换/刷新本窗格显示的会话。会话过多时
 /// 横向滚动，本窗格正在显示的页签高亮；每个页签可关闭、可拖动
-/// （拖到另一个窗格松手即把该会话挪过去）；最右「+」打开会话
-/// 切换面板（选已有设备 / 新建 / 关闭会话的统一入口）。
+/// （拖到另一个窗格松手即把该会话挪过去；手机上长按页签才进入
+/// 拖动，直接划动是滚动列表，桌面端按下即可拖）；最右「+」打开
+/// 会话切换面板（选已有设备 / 新建 / 关闭会话的统一入口）。
 class SessionTabBar extends StatelessWidget {
   const SessionTabBar({
     super.key,
@@ -111,26 +114,32 @@ class SessionTabBar extends StatelessWidget {
                       ),
                     ),
                   );
+                  // 可拖动：拖到另一个分屏窗格（DragTarget 接收区）松手
+                  // 即挪过去，拖到别处取消。手机上「按下即拖」会抢走 tab
+                  // 栏的横向滚动手势（想滚动反而把页签拖起来），所以手机
+                  // 长按页签才进入拖动；桌面端鼠标拖与滚轮滚动不冲突，
+                  // 保持按下即可拖。
+                  final feedback = Opacity(
+                    opacity: 0.85,
+                    child: Material(color: Colors.transparent, child: chip),
+                  );
+                  final dragging = Opacity(opacity: 0.35, child: chip);
                   return Padding(
                     padding: const EdgeInsets.only(right: 4),
-                    // 可拖动：拖到右侧分屏窗格（DragTarget 接收区）松手
-                    // 即把该会话设为右侧面板。拖到别处则取消。
-                    child: Draggable<String>(
-                      data: tab.id,
-                      // 拖拽中跟随指尖的半透明页签
-                      feedback: Opacity(
-                        opacity: 0.85,
-                        child: Material(
-                          color: Colors.transparent,
-                          child: chip,
-                        ),
-                      ),
-                      childWhenDragging: Opacity(
-                        opacity: 0.35,
-                        child: chip,
-                      ),
-                      child: chip,
-                    ),
+                    child: Platform.isAndroid || Platform.isIOS
+                        ? LongPressDraggable<String>(
+                            data: tab.id,
+                            // 拖拽中跟随指尖的半透明页签
+                            feedback: feedback,
+                            childWhenDragging: dragging,
+                            child: chip,
+                          )
+                        : Draggable<String>(
+                            data: tab.id,
+                            feedback: feedback,
+                            childWhenDragging: dragging,
+                            child: chip,
+                          ),
                   );
                 },
               ),
