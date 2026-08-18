@@ -24,6 +24,10 @@ class SessionTabBar extends StatelessWidget {
     required this.onSelect,
     required this.onClose,
     required this.onAdd,
+    required this.onRefresh,
+    required this.splitActive,
+    required this.splitEnabled,
+    required this.onToggleSplit,
   });
 
   final List<SessionTab> tabs;
@@ -37,6 +41,14 @@ class SessionTabBar extends StatelessWidget {
 
   /// 点击 + 打开会话切换面板。
   final VoidCallback onAdd;
+
+  /// 刷新当前会话。
+  final VoidCallback onRefresh;
+
+  /// 左右分屏开关状态与回调。分屏时 activeId 在左、另一个会话在右。
+  final bool splitActive;
+  final bool splitEnabled;
+  final VoidCallback onToggleSplit;
 
   @override
   Widget build(BuildContext context) {
@@ -101,6 +113,29 @@ class SessionTabBar extends StatelessWidget {
                     ),
                   );
                 },
+              ),
+            ),
+            // 刷新当前会话
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              iconSize: 18,
+              tooltip: '刷新',
+              onPressed: onRefresh,
+              icon: const Icon(Icons.refresh),
+            ),
+            // 左右分屏：当前会话在左，另一会话在右，中间可拖分隔
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              iconSize: 18,
+              tooltip: splitActive ? '退出分屏' : '左右分屏',
+              onPressed: splitEnabled ? onToggleSplit : null,
+              icon: Icon(
+                splitActive
+                    ? Icons.vertical_split
+                    : Icons.vertical_split_outlined,
+                color: splitActive
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
               ),
             ),
             // 「+」：打开会话切换面板（选设备/新建/管理会话的统一入口）
