@@ -71,45 +71,63 @@ class SessionTabBar extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final tab = tabs[index];
                   final active = tab.id == activeId;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 4),
-                    child: Material(
-                      color: active
-                          ? scheme.primary.withValues(alpha: 0.85)
-                          : scheme.surfaceContainerHighest.withValues(
-                              alpha: 0.45,
-                            ),
-                      borderRadius: BorderRadius.circular(10),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(10),
-                        onTap: () => onSelect(tab.id),
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 10),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 140,
-                                ),
-                                child: Text(
-                                  tab.label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context).textTheme.labelMedium
-                                      ?.copyWith(
-                                        fontWeight: active
-                                            ? FontWeight.w600
-                                            : FontWeight.w500,
-                                      ),
-                                ),
-                              ),
-                              const SizedBox(width: 2),
-                              _CloseDot(onClose: () => onClose(tab.id)),
-                            ],
+                  final chip = Material(
+                    color: active
+                        ? scheme.primary.withValues(alpha: 0.85)
+                        : scheme.surfaceContainerHighest.withValues(
+                            alpha: 0.45,
                           ),
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () => onSelect(tab.id),
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 10),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                maxWidth: 140,
+                              ),
+                              child: Text(
+                                tab.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelMedium
+                                    ?.copyWith(
+                                      fontWeight: active
+                                          ? FontWeight.w600
+                                          : FontWeight.w500,
+                                    ),
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            _CloseDot(onClose: () => onClose(tab.id)),
+                          ],
                         ),
                       ),
+                    ),
+                  );
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    // 可拖动：拖到右侧分屏窗格（DragTarget 接收区）松手
+                    // 即把该会话设为右侧面板。拖到别处则取消。
+                    child: Draggable<String>(
+                      data: tab.id,
+                      // 拖拽中跟随指尖的半透明页签
+                      feedback: Opacity(
+                        opacity: 0.85,
+                        child: Material(
+                          color: Colors.transparent,
+                          child: chip,
+                        ),
+                      ),
+                      childWhenDragging: Opacity(
+                        opacity: 0.35,
+                        child: chip,
+                      ),
+                      child: chip,
                     ),
                   );
                 },

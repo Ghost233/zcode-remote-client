@@ -327,7 +327,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   ),
                 ),
               ),
-              Expanded(child: _buildBrowser(store, rightId)),
+              Expanded(
+                // 拖一个页签到右侧松手：把该会话设为右侧面板
+                child: DragTarget<String>(
+                  onAcceptWithDetails: (d) {
+                    final id = d.data;
+                    if (id != currentId && _openIds.contains(id)) {
+                      setState(() => _splitRightId = id);
+                    }
+                  },
+                  builder: (context, candidate, rejected) {
+                    final hovering = candidate.isNotEmpty;
+                    return ColoredBox(
+                      color: hovering
+                          ? Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: 0.08)
+                          : Colors.transparent,
+                      child: _buildBrowser(store, rightId),
+                    );
+                  },
+                ),
+              ),
             ],
           );
         },
