@@ -246,16 +246,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  /// 桌面模式切换后重建当前会话：换新 GlobalKey 强制 WebView 重新创建，
+  /// 桌面模式切换后重建指定会话：换新 GlobalKey 强制 WebView 重新创建，
   /// 使新的 User-Agent 生效（UA 无法对已有 WebView 动态回退），缩放比例保留。
-  void _recreateCurrentSession() {
-    final store = context.read<DeviceStore>();
-    final id = store.currentId;
-    if (id == null || !_openIds.contains(id)) return;
+  void _recreateSession(String id) {
+    if (!_openIds.contains(id)) return;
     setState(() {
       _controllers.remove(id);
       _viewKeys[id] = GlobalKey();
     });
+  }
+
+  /// 桌面模式切换后重建当前会话（单屏悬浮球用；分屏窗格的小球重建
+  /// 各自窗格的会话，见 _buildSplitPaneSide）。
+  void _recreateCurrentSession() {
+    final store = context.read<DeviceStore>();
+    final id = store.currentId;
+    if (id != null) _recreateSession(id);
   }
 
   SystemUiOverlayStyle _systemOverlayStyle(Brightness brightness) {
@@ -472,8 +478,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
               // 悬浮控制栏（悬浮球+工具栏二合一）：默认右边缘收起为球，
               // 点击展开；可拖动吸附两侧，位置持久化；始终避让系统栏。
-              // 分屏时隐藏——全屏的悬浮球会跨在分隔条上碍事，此时用
-              // 各窗格页签栏的页签和刷新/分屏按钮即可。
+              // 分屏时这个全屏球隐藏，改为每个窗格各挂一个小号球
+              // （见 _buildSplitPaneSide），各管各的会话。
               if (splitPane == null)
               Positioned.fill(
                 child: SafeArea(
@@ -520,8 +526,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   /// 分屏的单个窗格：顶部是自己的页签栏（点页签切换本窗格显示的
-  /// 会话，刷新/「+」/关闭也是各管各的窗格），下面是浏览器。整个
-  /// 窗格是页签拖放目标——把页签拖进来松手即让本窗格改显示它。
+  /// 会话，刷新/「+」/关闭也是各管各的窗格），下面是浏览器，浏览器
+  /// 上叠一个本窗格专属的小号悬浮球（只控制本窗格会话，位置不持久化，
+  /// 闲置吸附到本窗格的外侧边缘）。整个窗格是页签拖放目标——把页签
+  /// 拖进来松手即让本窗格改显示它。
   Widget _buildSplitPaneSide(
     DeviceStore store,
     String paneActiveId, {
@@ -535,37 +543,88 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           color: hovering
               ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.08)
               : Colors.transparent,
-          child: Column(
+          child: Stack(
             children: [
-              SessionTabBar(
-                tabs: [
-                  for (final id in _openIds)
-                    SessionTab(id: id, label: _tabLabel(store, id)),
+              Column(
+                children: [
+                  SessionTabBar(
+                    tabs: [
+                      for (final id in _openIds)
+                        SessionTab(id: id, label: _tabLabel(store, id)),
+                    ],
+                    activeId: paneActiveId,
+                    onSelect: (id) => _showInPane(id, right: right),
+                    onClose: (id) {
+                      final device =
+                          store.devices.firstWhereOrNull((d) => d.id == id);
+                      if (device != null) _closeSession(device);
+                    },
+                    onAdd: () => DeviceSwitcherSheet.show(
+                      context,
+                      openIds: _openIds.toSet(),
+                      onSelect: (device) => _openInPane(device, right: right),
+                      onCloseSession: _closeSession,
+                      onOpenSettings: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SettingsPage(),
+                          ),
+                        );
+                      },
+                    ),
+                    onRefresh: () => _controllers[paneActiveId]?.reload(),
+                    splitActive: true,
+                    splitEnabled: true,
+                    onToggleSplit: () => _toggleSplit(store),
+                  ),
+                  Expanded(child: _buildBrowser(store, paneActiveId)),
                 ],
-                activeId: paneActiveId,
-                onSelect: (id) => _showInPane(id, right: right),
-                onClose: (id) {
-                  final device =
-                      store.devices.firstWhereOrNull((d) => d.id == id);
-                  if (device != null) _closeSession(device);
-                },
-                onAdd: () => DeviceSwitcherSheet.show(
-                  context,
-                  openIds: _openIds.toSet(),
-                  onSelect: (device) => _openInPane(device, right: right),
-                  onCloseSession: _closeSession,
-                  onOpenSettings: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const SettingsPage()),
-                    );
-                  },
-                ),
-                onRefresh: () => _controllers[paneActiveId]?.reload(),
-                splitActive: true,
-                splitEnabled: true,
-                onToggleSplit: () => _toggleSplit(store),
               ),
-              Expanded(child: _buildBrowser(store, paneActiveId)),
+              // 本窗格的小号悬浮球。只避让底部系统栏：Android 外层已有
+              // SafeArea（此处无内边距，是空操作）；iOS 分屏只处理了
+              // 顶部，这里把底部 Home 指示条让出来。
+              Positioned.fill(
+                child: SafeArea(
+                  top: false,
+                  left: false,
+                  right: false,
+                  child: FloatingDock(
+                    controller: _controllers[paneActiveId],
+                    viewKey: _viewKeys[paneActiveId],
+                    pageZoom: _pageZooms[paneActiveId]!,
+                    compact: true,
+                    persistPosition: false,
+                    initialDx: right ? 1.0 : 0.0,
+                    onReplaceAddress: () {
+                      final device = store.devices
+                          .firstWhereOrNull((d) => d.id == paneActiveId);
+                      if (device != null) {
+                        DeviceEditSheet.show(context, editing: device);
+                      }
+                    },
+                    onOpenSwitcher: () => DeviceSwitcherSheet.show(
+                      context,
+                      openIds: _openIds.toSet(),
+                      onSelect: (device) => _openInPane(device, right: right),
+                      onCloseSession: _closeSession,
+                      onOpenSettings: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SettingsPage(),
+                          ),
+                        );
+                      },
+                    ),
+                    onDesktopModeChanged: () =>
+                        _recreateSession(paneActiveId),
+                    onOpenSettings: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const SettingsPage()),
+                      );
+                    },
+                  ),
+                ),
+              ),
             ],
           ),
         );
