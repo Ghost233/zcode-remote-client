@@ -46,8 +46,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final ValueNotifier<Color> _pageBg =
       ValueNotifier(const Color(0xFF171717));
 
-  /// 左右分屏：右侧面板的会话 id（null = 单屏）。分屏时当前会话在左、
-  /// 此会话在右，中间分隔条可拖动；两侧都是保活的现有会话，不重连。
+  /// 左右分屏开关。开启后左右窗格顶部各自带页签栏：左窗格显示当前
+  /// 会话，右窗格显示 [_splitRightId]（未显式指定时取另一个打开的
+  /// 会话）。同一个 WebView 不能同时挂两个窗格，所以任何时候两
+  /// 窗格显示的会话都不同（点/拖对方窗格正在显示的页签 = 两侧互换）。
+  bool _splitOn = false;
+
+  /// 分屏右窗格显式指定的会话 id（null = 由 fallback 取另一个打开的
+  /// 会话）。分屏时两侧都是保活的现有会话，不重连。
   String? _splitRightId;
 
   /// 左侧窗格宽度占比（拖动分隔条更新），默认对半。
@@ -131,14 +137,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _controllers.remove(device.id);
       _pageZooms.remove(device.id)?.dispose();
       _viewKeys.remove(device.id);
-      // 分屏右侧被关掉：退出分屏（若当前还有会话则保持其单屏显示）
+      // 右窗格会话被关：清空显式指定，由 fallback 顶上来继续分屏
       if (_splitRightId == device.id) _splitRightId = null;
+      // 不够两个会话了：退出分屏
+      if (_openIds.length < 2) _splitOn = false;
     });
     // 关掉的是当前会话且还有其他会话保活着 → 切到最近打开的那个，
     // 保留其缩放，只收起平移模式。
     final store = context.read<DeviceStore>();
     if (store.currentId == device.id && _openIds.isNotEmpty) {
-      final nextId = _openIds.last;
+      // 后补会话不能是右窗格正在显示的那个（同一个 WebView 不能
+      // 同时挂在两个窗格里）。
+      final nextId = _openIds.lastWhere(
+        (id) => id != _splitRightId,
+        orElse: () => _openIds.last,
+      );
       final session = sessionOf(_viewKeys[nextId]);
       if (session != null && session.panMode.value) {
         session.setPanMode(false);
@@ -168,12 +181,59 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _toggleSplit(DeviceStore store) {
     setState(() {
-      if (_splitRightId != null) {
-        _splitRightId = null;
+      if (_splitOn) {
+        _splitOn = false;
       } else {
         _splitRightId = _effectiveSplitRight(store.currentId);
+        _splitOn = _splitRightId != null;
       }
     });
+  }
+
+  /// 分屏模式下让某个窗格显示会话 [id]（right=false 为左窗格）。
+  /// [id] 正显示在另一个窗格时两侧互换；别的窗格不受影响。
+  Future<void> _showInPane(String id, {required bool right}) async {
+    if (!_openIds.contains(id)) return;
+    final store = context.read<DeviceStore>();
+    if (!store.devices.any((d) => d.id == id)) return;
+    final leftId = store.currentId;
+    final rightId = _effectiveSplitRight(leftId);
+    if (right) {
+      if (rightId == null || id == rightId) return; // 已在右窗格
+      // 右窗格改显示 id；若 id 是左窗格当前页，左窗格改显示原右侧
+      final newLeft = (id == leftId) ? rightId : leftId;
+      setState(() => _splitRightId = id);
+      if (newLeft != null && newLeft != leftId) {
+        final session = sessionOf(_viewKeys[newLeft]);
+        if (session != null && session.panMode.value) {
+          session.setPanMode(false);
+        }
+        await store.select(newLeft);
+      }
+    } else {
+      if (id == leftId) return; // 已在左窗格
+      // 左窗格改显示 id；若 id 是右窗格当前页，右窗格改显示原左侧
+      final newRight = (id == rightId) ? leftId : rightId;
+      final session = sessionOf(_viewKeys[id]);
+      if (session != null && session.panMode.value) {
+        session.setPanMode(false);
+      }
+      await store.select(id);
+      if (!mounted) return;
+      setState(() => _splitRightId = newRight);
+    }
+  }
+
+  /// 分屏模式下从「+」面板选设备进指定窗格：没打开的会话先正常
+  /// 打开（默认进左窗格成为当前会话），目标是右窗格再挪过去。
+  Future<void> _openInPane(RemoteDevice device, {required bool right}) async {
+    if (_openIds.contains(device.id)) {
+      await _showInPane(device.id, right: right);
+      return;
+    }
+    await _selectDevice(device);
+    if (!mounted || !right) return;
+    await _showInPane(device.id, right: true);
   }
 
   Future<void> _onSystemBack() async {
@@ -255,9 +315,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
     );
 
-    // 顶栏会话页签：浏览器风格的 tab 条。Android 上放在 SafeArea 内、
-    // 网页层之上（竖向占位，不遮内容）；iOS 上悬浮在安全区内顶部。
-    final tabBar = _openIds.isNotEmpty
+    // 分屏状态：右窗格会话（显式指定或 fallback 取另一个打开的会话）。
+    final rightId = _splitOn ? _effectiveSplitRight(currentId) : null;
+    final splitOn = rightId != null && currentId != null;
+
+    // 顶栏会话页签：浏览器风格的 tab 条，仅单屏时显示（分屏后每个
+    // 窗格顶部自带一条，见 _buildSplitPaneSide）。Android 上放在
+    // SafeArea 内、网页层之上（竖向占位，不遮内容）；iOS 上悬浮在
+    // 安全区内顶部。
+    final tabBar = (_openIds.isNotEmpty && !splitOn)
         ? SessionTabBar(
             tabs: [
               for (final id in _openIds)
@@ -287,24 +353,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               final id = store.currentId;
               if (id != null) _controllers[id]?.reload();
             },
-            splitActive: _splitRightId != null,
+            splitActive: _splitOn,
             splitEnabled: _openIds.length >= 2,
             onToggleSplit: () => _toggleSplit(store),
           )
         : null;
 
-    // 分屏布局：左 = 当前会话，右 = 另一会话，中间分隔条可拖动调整。
+    // 分屏布局：左右窗格各自带页签栏，中间分隔条可拖动调整。
     final Widget? splitPane;
-    final rightId = _effectiveSplitRight(currentId);
-    if (_splitRightId != null && currentId != null && rightId != null) {
+    if (splitOn) {
       splitPane = LayoutBuilder(
         builder: (context, constraints) {
-          final dividerWidth = 10.0;
+          const dividerWidth = 10.0;
           final total = constraints.maxWidth;
           final leftW = (total * _splitFraction).clamp(120.0, total - 120.0);
           return Row(
             children: [
-              SizedBox(width: leftW, child: _buildBrowser(store, currentId)),
+              SizedBox(
+                width: leftW,
+                child: _buildSplitPaneSide(store, currentId, right: false),
+              ),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onHorizontalDragUpdate: (d) {
@@ -327,29 +395,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   ),
                 ),
               ),
-              Expanded(
-                // 拖一个页签到右侧松手：把该会话设为右侧面板
-                child: DragTarget<String>(
-                  onAcceptWithDetails: (d) {
-                    final id = d.data;
-                    if (id != currentId && _openIds.contains(id)) {
-                      setState(() => _splitRightId = id);
-                    }
-                  },
-                  builder: (context, candidate, rejected) {
-                    final hovering = candidate.isNotEmpty;
-                    return ColoredBox(
-                      color: hovering
-                          ? Theme.of(context)
-                              .colorScheme
-                              .primary
-                              .withValues(alpha: 0.08)
-                          : Colors.transparent,
-                      child: _buildBrowser(store, rightId),
-                    );
-                  },
-                ),
-              ),
+              Expanded(child: _buildSplitPaneSide(store, rightId, right: true)),
             ],
           );
         },
@@ -370,7 +416,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           resizeToAvoidBottomInset: true,
           body: Stack(
             children: [
-              // 网页层：各设备会话保活。分屏开启时替换为左右分栏布局。
+              // 网页层：各设备会话保活。分屏开启时替换为左右分栏布局
+              // （此时没有全局 tab 栏，各窗格顶部自带页签栏）。
               // - Android：避让安全区，tab 栏在安全区内竖向占位
               // - macOS / Windows：tab 栏竖向占位（悬浮叠放会压住网页
               //   顶部内容——桌面网页普遍把顶栏固定在视口最顶端）
@@ -384,7 +431,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             Expanded(child: splitPane ?? webLayer),
                           ],
                         )
-                      : webLayer,
+                      : (splitPane ?? webLayer),
                 )
               else if (Platform.isMacOS || Platform.isWindows)
                 tabBar != null
@@ -394,9 +441,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           Expanded(child: splitPane ?? webLayer),
                         ],
                       )
-                    : webLayer
+                    : (splitPane ?? webLayer)
               else
-                (splitPane ?? webLayer),
+                // iOS 分屏：窗格页签栏要避开状态栏/刘海，包一层仅顶部
+                // 的 SafeArea；底部仍交给 WKWebView 原生内缩，避免双重内缩。
+                splitPane != null
+                    ? SafeArea(
+                        top: true,
+                        bottom: false,
+                        left: false,
+                        right: false,
+                        child: splitPane,
+                      )
+                    : webLayer,
 
               // iOS：tab 条悬浮在安全区顶部，网页层保持全屏原生内缩
               if (tabBar != null && Platform.isIOS)
@@ -416,7 +473,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               // 悬浮控制栏（悬浮球+工具栏二合一）：默认右边缘收起为球，
               // 点击展开；可拖动吸附两侧，位置持久化；始终避让系统栏。
               // 分屏时隐藏——全屏的悬浮球会跨在分隔条上碍事，此时用
-              // tab 栏的刷新/分屏按钮和页签即可。
+              // 各窗格页签栏的页签和刷新/分屏按钮即可。
               if (splitPane == null)
               Positioned.fill(
                 child: SafeArea(
@@ -462,6 +519,60 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// 分屏的单个窗格：顶部是自己的页签栏（点页签切换本窗格显示的
+  /// 会话，刷新/「+」/关闭也是各管各的窗格），下面是浏览器。整个
+  /// 窗格是页签拖放目标——把页签拖进来松手即让本窗格改显示它。
+  Widget _buildSplitPaneSide(
+    DeviceStore store,
+    String paneActiveId, {
+    required bool right,
+  }) {
+    return DragTarget<String>(
+      onAcceptWithDetails: (d) => _showInPane(d.data, right: right),
+      builder: (context, candidate, rejected) {
+        final hovering = candidate.isNotEmpty;
+        return ColoredBox(
+          color: hovering
+              ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.08)
+              : Colors.transparent,
+          child: Column(
+            children: [
+              SessionTabBar(
+                tabs: [
+                  for (final id in _openIds)
+                    SessionTab(id: id, label: _tabLabel(store, id)),
+                ],
+                activeId: paneActiveId,
+                onSelect: (id) => _showInPane(id, right: right),
+                onClose: (id) {
+                  final device =
+                      store.devices.firstWhereOrNull((d) => d.id == id);
+                  if (device != null) _closeSession(device);
+                },
+                onAdd: () => DeviceSwitcherSheet.show(
+                  context,
+                  openIds: _openIds.toSet(),
+                  onSelect: (device) => _openInPane(device, right: right),
+                  onCloseSession: _closeSession,
+                  onOpenSettings: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const SettingsPage()),
+                    );
+                  },
+                ),
+                onRefresh: () => _controllers[paneActiveId]?.reload(),
+                splitActive: true,
+                splitEnabled: true,
+                onToggleSplit: () => _toggleSplit(store),
+              ),
+              Expanded(child: _buildBrowser(store, paneActiveId)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildBrowser(DeviceStore store, String id) {
     RemoteDevice? device;
     for (final d in store.devices) {
@@ -476,6 +587,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             _controllers.remove(id);
             _pageZooms.remove(id)?.dispose();
             _viewKeys.remove(id);
+            if (_splitRightId == id) _splitRightId = null;
+            if (_openIds.length < 2) _splitOn = false;
           });
         }
       });

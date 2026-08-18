@@ -11,11 +11,13 @@ class SessionTab {
   final String label;
 }
 
-/// 浏览器风格的顶部会话页签栏。
+/// 浏览器风格的会话页签栏。
 ///
-/// 玻璃材质横条，钉在页面最顶部（避让状态栏）：会话过多时横向滚动，
-/// 当前会话高亮；每个页签可关闭；最右「+」打开会话切换面板
-/// （选已有设备 / 新建 / 关闭会话的统一入口）。
+/// 玻璃材质横条。单屏时钉在页面最顶部（避让状态栏）；分屏时左右
+/// 窗格顶部各有一条，各自切换/刷新本窗格显示的会话。会话过多时
+/// 横向滚动，本窗格正在显示的页签高亮；每个页签可关闭、可拖动
+/// （拖到另一个窗格松手即把该会话挪过去）；最右「+」打开会话
+/// 切换面板（选已有设备 / 新建 / 关闭会话的统一入口）。
 class SessionTabBar extends StatelessWidget {
   const SessionTabBar({
     super.key,
@@ -45,7 +47,7 @@ class SessionTabBar extends StatelessWidget {
   /// 刷新当前会话。
   final VoidCallback onRefresh;
 
-  /// 左右分屏开关状态与回调。分屏时 activeId 在左、另一个会话在右。
+  /// 左右分屏开关状态与回调（分屏中窗格页签栏上表现为「退出分屏」）。
   final bool splitActive;
   final bool splitEnabled;
   final VoidCallback onToggleSplit;
