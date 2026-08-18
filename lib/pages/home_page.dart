@@ -266,22 +266,30 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           resizeToAvoidBottomInset: true,
           body: Stack(
             children: [
-              // 网页层：各设备会话保活（Android 避让安全区，见上方注释）
-              Platform.isAndroid
-                  ? SafeArea(
-                      child: tabBar != null
-                          ? Column(
-                              children: [
-                                tabBar,
-                                Expanded(child: webLayer),
-                              ],
-                            )
-                          : webLayer,
-                    )
-                  : webLayer,
+              // 网页层：各设备会话保活。
+              // - Android：避让安全区，tab 栏在安全区内竖向占位
+              // - macOS / Windows：tab 栏竖向占位（悬浮叠放会压住网页
+              //   顶部内容——桌面网页普遍把顶栏固定在视口最顶端）
+              // - iOS：网页全屏原生内缩，tab 栏悬浮在安全区顶部（见下）
+              if (Platform.isAndroid)
+                SafeArea(
+                  child: tabBar != null
+                      ? Column(
+                          children: [tabBar, Expanded(child: webLayer)],
+                        )
+                      : webLayer,
+                )
+              else if (Platform.isMacOS || Platform.isWindows)
+                tabBar != null
+                    ? Column(
+                        children: [tabBar, Expanded(child: webLayer)],
+                      )
+                    : webLayer
+              else
+                webLayer,
 
               // iOS：tab 条悬浮在安全区顶部，网页层保持全屏原生内缩
-              if (tabBar != null && !Platform.isAndroid)
+              if (tabBar != null && Platform.isIOS)
                 Positioned(
                   top: 0,
                   left: 0,
