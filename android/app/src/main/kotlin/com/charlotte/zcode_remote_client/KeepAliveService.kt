@@ -25,6 +25,8 @@ class KeepAliveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val nm = getSystemService(NotificationManager::class.java)
         val notification: Notification
+        // 通知文案按用途：下载更新时说下载，别再显示"保持会话连接"误导。
+        val text = intent?.getStringExtra("text") ?: "正在后台保持会话连接"
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
                 NotificationChannel(
@@ -42,7 +44,7 @@ class KeepAliveService : Service() {
             notification = Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_stat_download)
                 .setContentTitle("ZCode 远程客户端")
-                .setContentText("正在后台保持会话连接")
+                .setContentText(text)
                 .setOngoing(true)
                 .setContentIntent(contentIntent)
                 .build()
@@ -51,7 +53,7 @@ class KeepAliveService : Service() {
             notification = Notification.Builder(this)
                 .setSmallIcon(R.drawable.ic_stat_download)
                 .setContentTitle("ZCode 远程客户端")
-                .setContentText("正在后台保持会话连接")
+                .setContentText(text)
                 .setOngoing(true)
                 .build()
         }

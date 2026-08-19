@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
+import '../services/download_manager.dart';
 import '../services/keep_alive.dart';
 import '../widgets/browser_session.dart';
 import '../widgets/browser_view.dart';
@@ -67,17 +68,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _checkUpdatesOnStart();
+    // 下载结束后若人还在后台且用户没开保活：撤掉为下载临时挂的前台
+    // 服务，不留一条名不副实的常驻通知（开了保活则继续挂着护会话）。
+    DownloadManager.instance.status.addListener(_onDownloadStatusChanged);
+  }
+
+  void _onDownloadStatusChanged() {
+    final s = DownloadManager.instance.status.value;
+    if (s == DownloadStatus.downloading) return;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    final inBackground = lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.hidden;
+    if (inBackground && !context.read<DeviceStore>().keepAliveEnabled) {
+      BackgroundKeepAlive.stop();
+    }
   }
 
   /// 后台保活：退后台挂前台服务保持 ZCode 会话连接（Android、可关），
   /// 回前台撤掉。避免回来时 WebSocket 已断、页面整页刷新重连。
+  /// 例外：更新包正在下载时无视开关一定挂——下载连接不能因切后台被
+  /// 系统掐断（下载结束后按上面的监听决定撤不撤）。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final store = context.read<DeviceStore>();
     switch (state) {
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
-        if (store.keepAliveEnabled) BackgroundKeepAlive.start();
+        final downloading =
+            DownloadManager.instance.status.value == DownloadStatus.downloading;
+        if (downloading) {
+          BackgroundKeepAlive.start(text: '正在后台下载更新，请保持后台运行');
+        } else if (store.keepAliveEnabled) {
+          BackgroundKeepAlive.start();
+        }
       case AppLifecycleState.resumed:
         BackgroundKeepAlive.stop();
       case AppLifecycleState.inactive:
@@ -96,6 +119,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    DownloadManager.instance.status.removeListener(_onDownloadStatusChanged);
     WidgetsBinding.instance.removeObserver(this);
     for (final z in _pageZooms.values) {
       z.dispose();

@@ -13,10 +13,12 @@ class BackgroundKeepAlive {
   static const _channel = MethodChannel('app/keep_alive');
   static bool _running = false;
 
-  static Future<void> start() async {
+  /// [text]：常驻通知文案。用途不同文案不同（保活会话/后台下载），
+  /// 默认保持会话连接。
+  static Future<void> start({String text = '正在后台保持会话连接'}) async {
     if (!Platform.isAndroid || _running) return;
     try {
-      await _channel.invokeMethod<void>('start');
+      await _channel.invokeMethod<void>('start', {'text': text});
       _running = true;
     } catch (_) {
       _running = false;

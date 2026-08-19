@@ -15,6 +15,8 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "start" -> {
                         val intent = Intent(this, KeepAliveService::class.java)
+                        // text：常驻通知文案（下载更新/保持会话连接）。
+                        intent.putExtra("text", call.argument<String>("text"))
                         if (Build.VERSION.SDK_INT >= 26) {
                             startForegroundService(intent)
                         } else {
