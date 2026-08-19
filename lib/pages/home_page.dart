@@ -60,9 +60,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// 左侧窗格宽度占比（拖动分隔条更新），默认对半。
   double _splitFraction = 0.5;
 
-  /// 是否已做过启动自动恢复（只恢复一次，之后由用户操作驱动）。
-  bool _autoOpened = false;
-
   @override
   void initState() {
     super.initState();
@@ -316,17 +313,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final store = context.watch<DeviceStore>();
     final currentId = store.currentId;
     final currentIndex = currentId != null ? _openIds.indexOf(currentId) : -1;
-
-    // 响应式自动打开：设备列表是异步加载的，可能晚于首帧——一次性检查会
-    // 永远停在空状态。只在"尚未打开过任何会话"时自动恢复，避免用户
-    // 主动关闭全部会话后又被强行拉起。
-    if (currentId != null && _openIds.isEmpty && !_autoOpened) {
-      _autoOpened = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _open(currentId);
-      });
-    }
 
     // 安全区策略（v1.4.5 起）：
     // - iOS：网页层完全铺满，WKWebView 原生自动内缩（AUTOMATIC），
