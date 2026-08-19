@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'update_checker.dart';
+import 'keep_alive.dart';
 
 /// 通知栏点按跳转用的全局导航键（main.dart 挂到 MaterialApp 上）。
 final GlobalKey<NavigatorState> kAppNavigatorKey = GlobalKey<NavigatorState>();
@@ -297,6 +298,14 @@ class DownloadManager {
     totalBytes.value = 1;
     status.value = DownloadStatus.downloading;
     _lastNotifiedPercent = -1;
+    // 下载一开始就挂前台服务（此刻应用必然在前台，用户刚点的按钮，
+    // Android 12+ 的前台服务后台启动限制不适用）。若等到切后台的
+    // 生命周期回调再挂，onStop 时应用已算后台，启动会被系统拒绝且
+    // 异常被静默吞掉——下载连接随后就被系统断网掐断。结束时由
+    // HomePage 的状态监听决定撤不撤（没开保活则撤）。
+    unawaited(
+      BackgroundKeepAlive.start(text: '正在后台下载更新，请保持后台运行'),
+    );
     final job = _run();
     _job = job;
     unawaited(

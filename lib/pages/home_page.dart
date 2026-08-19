@@ -76,22 +76,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _onDownloadStatusChanged() {
     final s = DownloadManager.instance.status.value;
     if (s == DownloadStatus.downloading) return;
-    final lifecycle = WidgetsBinding.instance.lifecycleState;
-    final inBackground = lifecycle == AppLifecycleState.paused ||
-        lifecycle == AppLifecycleState.hidden;
-    if (inBackground && !context.read<DeviceStore>().keepAliveEnabled) {
+    // 下载结束：为下载临时挂的前台服务该撤就撤（用户开了保活则
+    // 留着继续护会话）。
+    if (!context.read<DeviceStore>().keepAliveEnabled) {
       BackgroundKeepAlive.stop();
     }
   }
 
   /// 后台保活：退后台挂前台服务保持 ZCode 会话连接（Android、可关），
   /// 回前台撤掉。避免回来时 WebSocket 已断、页面整页刷新重连。
-  /// 例外：更新包正在下载时无视开关一定挂——下载连接不能因切后台被
-  /// 系统掐断（下载结束后按上面的监听决定撤不撤）。
+  /// 下载更新时的服务在下载开始的一刻就挂上了（见 DownloadManager），
+  /// 这里的 inactive/paused 补挂只是兜底——onStop 后启动前台服务会被
+  /// Android 12+ 拒绝且异常被静默吞掉，inactive（onPause）时还来得及。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final store = context.read<DeviceStore>();
     switch (state) {
+      case AppLifecycleState.inactive:
+        // 仅下载中补挂：inactive 在弹权限框/拉通知栏时也会触发，
+        // 会话保活没必要这么早挂服务。
+        if (DownloadManager.instance.status.value ==
+            DownloadStatus.downloading) {
+          BackgroundKeepAlive.start(text: '正在后台下载更新，请保持后台运行');
+        }
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
         final downloading =
@@ -103,7 +110,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       case AppLifecycleState.resumed:
         BackgroundKeepAlive.stop();
-      case AppLifecycleState.inactive:
       case AppLifecycleState.detached:
         break;
     }

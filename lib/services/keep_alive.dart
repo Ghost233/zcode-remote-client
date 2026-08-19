@@ -14,9 +14,10 @@ class BackgroundKeepAlive {
   static bool _running = false;
 
   /// [text]：常驻通知文案。用途不同文案不同（保活会话/后台下载），
-  /// 默认保持会话连接。
+  /// 默认保持会话连接。已运行时重复调用不早退——原生 startService 重发
+  /// intent 只会刷新通知文案，需要靠它把「后台下载」文案换回会话文案。
   static Future<void> start({String text = '正在后台保持会话连接'}) async {
-    if (!Platform.isAndroid || _running) return;
+    if (!Platform.isAndroid) return;
     try {
       await _channel.invokeMethod<void>('start', {'text': text});
       _running = true;
