@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -6,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
 import '../services/download_manager.dart';
+import '../services/process_memory.dart';
 import '../services/update_checker.dart';
 import '../widgets/device_edit_sheet.dart';
 import '../widgets/update_dialog.dart';
@@ -261,6 +264,7 @@ class _SettingsPageState extends State<SettingsPage> {
       body: SafeArea(
         child: ListView(
           children: [
+            const _MemoryTile(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: Text(
@@ -384,6 +388,57 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 内存占用条目：展示应用全部进程的 RSS 总和，每 2 秒自动刷新，
+/// 点击立即刷新。用于观察内存趋势（排查泄漏时留意持续单调上涨）。
+/// Android 口径含 WebView 渲染进程；iOS 取不到时显示不可用。
+class _MemoryTile extends StatefulWidget {
+  const _MemoryTile();
+
+  @override
+  State<_MemoryTile> createState() => _MemoryTileState();
+}
+
+class _MemoryTileState extends State<_MemoryTile> {
+  String _text = '…';
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    final bytes = await ProcessMemory.rssBytes();
+    if (!mounted) return;
+    setState(() {
+      _text = bytes == null
+          ? '本平台暂不支持'
+          : bytes >= 1073741824
+          ? '${(bytes / 1073741824).toStringAsFixed(2)} GB'
+          : '${(bytes / 1048576).toStringAsFixed(1)} MB';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      leading: const Icon(Icons.memory_outlined),
+      title: const Text('内存占用'),
+      subtitle: Text('$_text · 每 2 秒刷新，点击立即刷新'),
+      onTap: _refresh,
     );
   }
 }
