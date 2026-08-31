@@ -23,6 +23,7 @@ class KeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        running = true
         val nm = getSystemService(NotificationManager::class.java)
         val notification: Notification
         // 通知文案按用途：下载更新时说下载，别再显示"保持会话连接"误导。
@@ -72,8 +73,23 @@ class KeepAliveService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onDestroy() {
+        running = false
+        super.onDestroy()
+    }
+
     companion object {
         private const val CHANNEL_ID = "keep_alive"
         private const val NOTIFICATION_ID = 2001
+
+        /**
+         * 服务是否在运行（MainActivity.onPause 据此决定要不要补挂：
+         * 下载中服务已在跑，跳过可避免把下载通知文案刷回会话文案）。
+         * 异常被杀没走 onDestroy 时标记会滞留为 true，此时 Dart 侧的
+         * 生命周期补挂仍会把服务拉起来，不影响恢复。
+         */
+        @Volatile
+        var running = false
+            private set
     }
 }

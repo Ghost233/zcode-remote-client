@@ -82,19 +82,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// 后台保活：退后台挂前台服务保持 ZCode 会话连接（Android、可关），
   /// 回前台撤掉。避免回来时 WebSocket 已断、页面整页刷新重连。
-  /// 下载更新时的服务在下载开始的一刻就挂上了（见 DownloadManager），
-  /// 这里的 inactive/paused 补挂只是兜底——onStop 后启动前台服务会被
-  /// Android 12+ 拒绝且异常被静默吞掉，inactive（onPause）时还来得及。
+  /// 主挂点在原生 MainActivity.onPause（开关状态已同步到原生侧）——
+  /// onStop 后启动前台服务会被 Android 12+ 拒绝且异常被静默吞掉
+  /// （v1.6.4 的下载断连就是这么来的），等 Dart 生命周期回调再挂有
+  /// 落在 onStop 之后的时序风险。这里的 inactive（onPause）补挂负责
+  /// 修正通知文案（下载中换成下载文案），paused/hidden 留作最后兜底。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final store = context.read<DeviceStore>();
     switch (state) {
       case AppLifecycleState.inactive:
-        // 仅下载中补挂：inactive 在弹权限框/拉通知栏时也会触发，
-        // 会话保活没必要这么早挂服务。
+        // 下载中/开了保活都在此补挂。瞬态 inactive（权限弹窗等）会
+        // 闪挂一下，resumed 即撤，渠道 IMPORTANCE_MIN 不占状态栏。
         if (DownloadManager.instance.status.value ==
             DownloadStatus.downloading) {
           BackgroundKeepAlive.start(text: '正在后台下载更新，请保持后台运行');
+        } else if (store.keepAliveEnabled) {
+          BackgroundKeepAlive.start();
         }
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:

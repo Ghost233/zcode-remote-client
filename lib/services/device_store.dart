@@ -1,9 +1,11 @@
+import 'dart:async' show unawaited;
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/remote_device.dart';
+import 'keep_alive.dart';
 
 /// 设备列表 + 悬浮球偏好，shared_preferences 持久化。
 class DeviceStore extends ChangeNotifier {
@@ -71,6 +73,9 @@ class DeviceStore extends ChangeNotifier {
     desktopMode = prefs.getBool(_kDesktopMode) ?? false;
     pinchZoomEnabled = prefs.getBool(_kPinchZoom) ?? false;
     keepAliveEnabled = prefs.getBool(_kKeepAlive) ?? true;
+    // 同步给原生侧：MainActivity.onPause 挂保活服务时读原生自己的
+    // 持久化开关。每次加载都同步一次，保证两侧状态最终一致。
+    unawaited(BackgroundKeepAlive.syncEnabled(keepAliveEnabled));
     notifyListeners();
   }
 
@@ -207,11 +212,12 @@ class DeviceStore extends ChangeNotifier {
     await prefs.setBool(_kPinchZoom, enabled);
   }
 
-  /// 记录后台保活开关。
+  /// 记录后台保活开关（同时同步给原生侧，见 BackgroundKeepAlive.syncEnabled）。
   Future<void> setKeepAliveEnabled(bool enabled) async {
     keepAliveEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kKeepAlive, enabled);
+    unawaited(BackgroundKeepAlive.syncEnabled(enabled));
     notifyListeners();
   }
 

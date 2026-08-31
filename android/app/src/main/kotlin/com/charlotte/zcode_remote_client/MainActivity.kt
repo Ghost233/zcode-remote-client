@@ -1,6 +1,7 @@
 package com.charlotte.zcode_remote_client
 
 import android.app.ActivityManager
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Process
@@ -31,6 +32,17 @@ class MainActivity : FlutterActivity() {
                         stopService(Intent(this, KeepAliveService::class.java))
                         result.success(true)
                     }
+                    "setEnabled" -> {
+                        // Dart 侧「后台保活」开关同步，原生 onPause 挂
+                        // 服务时读。默认值 true 与 Dart 侧缺省一致。
+                        keepAlivePrefs.edit()
+                            .putBoolean(
+                                KEY_KEEP_ALIVE_ENABLED,
+                                call.argument<Boolean>("enabled") ?: true,
+                            )
+                            .apply()
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -44,6 +56,42 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /**
+     * 保活服务的主挂点。onPause 是退后台路径上 Android 12+ 后台启动
+     * 前台服务限制生效前最后的成功时机——等 Dart 的生命周期回调再经
+     * MethodChannel 调回来，有落在 onStop 之后被系统拒绝的时序风险
+     * （异常还会被静默吞掉，v1.6.4 的下载断连就是这么来的）。
+     * 服务已在运行（下载中）则不动，通知文案由 Dart 侧 inactive 回调
+     * 按需刷新。瞬态 onPause（权限弹窗等）会闪挂一下，Dart 侧
+     * resumed 即撤。撤回的通知停掉无启动限制，留给 Dart 即可。
+     */
+    override fun onPause() {
+        if (keepAlivePrefs.getBoolean(KEY_KEEP_ALIVE_ENABLED, true) &&
+            !KeepAliveService.running
+        ) {
+            try {
+                val intent = Intent(this, KeepAliveService::class.java)
+                if (Build.VERSION.SDK_INT >= 26) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+            } catch (_: Exception) {
+                // 极端 ROM 在 onPause 也可能拒绝：吞掉，Dart 侧 inactive
+                // 还会补挂一次；绝不能崩在 onPause 里。
+            }
+        }
+        super.onPause()
+    }
+
+    private val keepAlivePrefs
+        get() = getSharedPreferences(PREFS_KEEP_ALIVE, Context.MODE_PRIVATE)
+
+    private companion object {
+        const val PREFS_KEEP_ALIVE = "keep_alive"
+        const val KEY_KEEP_ALIVE_ENABLED = "enabled"
     }
 
     private fun readRssKb(pid: Int): Long {
