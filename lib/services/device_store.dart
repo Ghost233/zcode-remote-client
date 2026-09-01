@@ -18,6 +18,7 @@ class DeviceStore extends ChangeNotifier {
   static const _kDesktopMode = 'desktop_mode';
   static const _kPinchZoom = 'pinch_zoom_enabled';
   static const _kKeepAlive = 'keep_alive_enabled';
+  static const _kAutoReclaim = 'auto_reclaim_on_pressure';
 
   List<RemoteDevice> devices = [];
   String? currentId;
@@ -43,6 +44,11 @@ class DeviceStore extends ChangeNotifier {
   /// 后台保活（Android 前台服务：退后台保持会话连接不刷新），默认开。
   /// iOS 系统不允许第三方后台保活，此开关只在 Android 生效。
   bool keepAliveEnabled = true;
+
+  /// 内存吃紧时自动回收会话（macOS：系统内存压力达紧急级别时销毁后台
+  /// 会话 WebView 回收 WebContent 高水位，危急时连当前会话一起重建），
+  /// 默认开。悬浮球角标实时显示压力级别。见 services/memory_guard.dart。
+  bool autoReclaimOnPressure = true;
 
   RemoteDevice? get current {
     if (currentId == null) return null;
@@ -73,6 +79,7 @@ class DeviceStore extends ChangeNotifier {
     desktopMode = prefs.getBool(_kDesktopMode) ?? false;
     pinchZoomEnabled = prefs.getBool(_kPinchZoom) ?? false;
     keepAliveEnabled = prefs.getBool(_kKeepAlive) ?? true;
+    autoReclaimOnPressure = prefs.getBool(_kAutoReclaim) ?? true;
     // 同步给原生侧：MainActivity.onPause 挂保活服务时读原生自己的
     // 持久化开关。每次加载都同步一次，保证两侧状态最终一致。
     unawaited(BackgroundKeepAlive.syncEnabled(keepAliveEnabled));
@@ -218,6 +225,13 @@ class DeviceStore extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kKeepAlive, enabled);
     unawaited(BackgroundKeepAlive.syncEnabled(enabled));
+    notifyListeners();
+  }
+
+  Future<void> setAutoReclaimOnPressure(bool enabled) async {
+    autoReclaimOnPressure = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAutoReclaim, enabled);
     notifyListeners();
   }
 

@@ -6,6 +6,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:provider/provider.dart';
 
 import '../services/device_store.dart';
+import '../services/memory_guard.dart';
 import 'browser_session.dart';
 import 'browser_view.dart';
 import 'glass.dart';
@@ -340,15 +341,26 @@ class _FloatingDockState extends State<FloatingDock> {
               child: AnimatedOpacity(
                 opacity: _dimmed ? 0.2 : 1.0,
                 duration: const Duration(milliseconds: 400),
-                child: GlassContainer(
-                  key: _dockKey,
-                  borderRadius: _expanded
-                      ? (widget.compact ? 22.0 : 28.0)
-                      : _bubbleSize / 2,
-                  padding: _expanded
-                      ? const EdgeInsets.symmetric(horizontal: 4, vertical: 6)
-                      : EdgeInsets.zero,
-                  child: _expanded ? _buildExpanded() : _buildCollapsed(),
+                // 角标放在 GlassContainer 外面：容器的圆形 ClipRRect 会把
+                // 超出圆外的部分裁掉，角标放里面只剩一半、数字不可读。
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    GlassContainer(
+                      key: _dockKey,
+                      borderRadius: _expanded
+                          ? (widget.compact ? 22.0 : 28.0)
+                          : _bubbleSize / 2,
+                      padding: _expanded
+                          ? const EdgeInsets.symmetric(horizontal: 4, vertical: 6)
+                          : EdgeInsets.zero,
+                      child: _expanded ? _buildExpanded() : _buildCollapsed(),
+                    ),
+                    // 压力级别角标只在收起态的悬浮球上展示；球总吸附在
+                    // 左右边缘，角标放朝向屏幕内侧的角，避免被窗口裁掉。
+                    if (!_expanded)
+                      _buildPressureBadge(onInnerLeft: _dx == 1.0),
+                  ],
                 ),
               ),
             ),
@@ -420,6 +432,61 @@ class _FloatingDockState extends State<FloatingDock> {
         ),
       ),
     );
+  }
+
+  /// 内存压力级别角标：悬浮在球朝向屏幕内侧的角上（外层 Stack，不被
+  /// 玻璃容器的圆形裁剪，也不出窗口边界）；IgnorePointer 不抢球的
+  /// 点击/拖拽。仅 macOS 有级别数据。
+  Widget _buildPressureBadge({required bool onInnerLeft}) {
+    return Positioned(
+      left: onInnerLeft ? -5 : null,
+      right: onInnerLeft ? null : -5,
+      top: -5,
+      child: IgnorePointer(
+        child: ValueListenableBuilder<int>(
+          valueListenable: MemoryGuard.instance.pressureLevel,
+          builder: (context, level, _) {
+            if (level <= 0) return const SizedBox.shrink();
+            return Container(
+              width: widget.compact ? 15 : 18,
+              height: widget.compact ? 15 : 18,
+              decoration: BoxDecoration(
+                color: _pressureColor(level),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  width: 2,
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '$level',
+                style: TextStyle(
+                  fontSize: widget.compact ? 9 : 11,
+                  height: 1,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// 内存压力级别 → 角标颜色：绿(正常) 橙(警告) 红(紧急) 深红(危急)。
+  Color _pressureColor(int level) {
+    switch (level) {
+      case 1:
+        return const Color(0xFF34C759);
+      case 2:
+        return const Color(0xFFFF9500);
+      case 3:
+        return const Color(0xFFFF3B30);
+      default:
+        return const Color(0xFFB00020);
+    }
   }
 
   /// 工具栏图标按钮：紧凑模式下图标小一号。

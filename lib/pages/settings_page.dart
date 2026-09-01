@@ -347,6 +347,23 @@ class _SettingsPageState extends State<SettingsPage> {
             const Divider(height: 32),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                '内存哨兵（macOS）',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            SwitchListTile(
+              title: const Text('内存吃紧时自动回收会话'),
+              subtitle: const Text('系统内存压力达到紧急级别（3）时自动销毁后台会话的内核'
+                  '回收内存——页签保留，点击即恢复；危急级别（4）连当前会话'
+                  '一起重建并提示。悬浮球角标实时显示当前压力级别'
+                  '（绿 1 正常 · 橙 2 警告 · 红 3 紧急 · 深红 4 危急）'),
+              value: store.autoReclaimOnPressure,
+              onChanged: (v) => store.setAutoReclaimOnPressure(v),
+            ),
+            const Divider(height: 32),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
               child: Text('关于', style: Theme.of(context).textTheme.titleSmall),
             ),
             ListTile(

@@ -1,6 +1,7 @@
 import 'dart:collection' show UnmodifiableListView;
 import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -307,6 +308,9 @@ class BrowserViewState extends State<BrowserView>
   double _progress = 0;
   WebResourceError? _mainFrameError;
 
+  /// initState 里 read 一次（dispose 时 context 已不可用，靠它摘监听）。
+  late final DeviceStore _store;
+
   /// WebView 设置快照：initialSettings 的唯一权威来源。
   ///
   /// 运行期改设置（缩放、双指开关）都改这份再整体下发，不做
@@ -349,6 +353,10 @@ class BrowserViewState extends State<BrowserView>
         contentInsetAdjustmentBehavior:
             ScrollViewContentInsetAdjustmentBehavior.AUTOMATIC,
         automaticallyAdjustsScrollIndicatorInsets: true,
+        // Safari Web Inspector 仅 debug 构建开放（设置页「网页内存诊断」
+        // 的配套深查通道，Safari 开发菜单直连本机 WebView）；release
+        // 保持关闭，不暴露可被页面触发的调试通道。
+        isInspectable: kDebugMode,
       );
 
   /// 平移（抓手）模式开关，工具栏读取/切换。
@@ -366,9 +374,10 @@ class BrowserViewState extends State<BrowserView>
   @override
   void initState() {
     super.initState();
+    _store = context.read<DeviceStore>();
     widget.pageZoom.addListener(_applyPageZoom);
     if (Platform.isAndroid) {
-      pinchZoom.value = context.read<DeviceStore>().pinchZoomEnabled;
+      pinchZoom.value = _store.pinchZoomEnabled;
     }
     // 下拉刷新控制器只有移动端有实现，桌面端构造会抛 UnimplementedError。
     if (Platform.isIOS || Platform.isAndroid) {
@@ -724,9 +733,10 @@ class BrowserViewState extends State<BrowserView>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final store = context.watch<DeviceStore>();
     // 桌面模式是"创建时"快照：UA / 原生 contentMode / 视口脚本都只能随
     // WebView 重建生效，切换开关时由外部重建当前会话。
-    final desktopMode = context.watch<DeviceStore>().desktopMode;
+    final desktopMode = store.desktopMode;
     return Stack(
       children: [
         InAppWebView(

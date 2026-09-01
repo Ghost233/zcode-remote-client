@@ -12,6 +12,7 @@ import '../models/remote_device.dart';
 import '../services/device_store.dart';
 import '../services/download_manager.dart';
 import '../services/keep_alive.dart';
+import '../services/memory_guard.dart';
 import '../widgets/browser_session.dart';
 import '../widgets/browser_view.dart';
 import '../widgets/device_edit_sheet.dart';
@@ -41,6 +42,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final Map<String, ValueNotifier<double>> _pageZooms = {};
   final Map<String, GlobalKey> _viewKeys = {};
 
+  /// 被内存哨兵挂起的会话：页签保留、WebView 已销毁（WebContent 高水位
+  /// 随之回收），点页签唤醒时重建。见 services/memory_guard.dart。
+  final Set<String> _suspended = {};
+
   /// 当前会话的页面实际背景色（从网页读取）。Android 上 SafeArea 露出
   /// 的区域刷成这个颜色（默认近黑，贴合 zcode 深色界面），状态栏图标
   /// 亮暗也随它走。
@@ -68,6 +73,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     // 下载结束后若人还在后台且用户没开保活：撤掉为下载临时挂的前台
     // 服务，不留一条名不副实的常驻通知（开了保活则继续挂着护会话）。
     DownloadManager.instance.status.addListener(_onDownloadStatusChanged);
+    // 内存哨兵：系统内存吃紧时自动回收会话（macOS，见 memory_guard.dart）。
+    // 注意别写成级联：`() => …` 箭头会把后续 `..` 吞进闭包体。
+    final guard = MemoryGuard.instance;
+    guard.enabledProvider = () => context.read<DeviceStore>().autoReclaimOnPressure;
+    guard.openIdsProvider = () => List.of(_openIds);
+    guard.currentIdProvider = () => context.read<DeviceStore>().currentId;
+    guard.onReclaim = _reclaimSession;
+    guard.onNotify = _notifyReclaim;
+    guard.start();
   }
 
   void _onDownloadStatusChanged() {
@@ -126,6 +140,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    MemoryGuard.instance.stop();
     DownloadManager.instance.status.removeListener(_onDownloadStatusChanged);
     WidgetsBinding.instance.removeObserver(this);
     for (final z in _pageZooms.values) {
@@ -151,6 +166,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final store = context.read<DeviceStore>();
     final switching = store.currentId != device.id;
     _open(device.id);
+    _wake(device.id);
     if (switching) {
       // 切会话保留各自的缩放（双指缩放是 WebView 自身状态，本来就
       // 跟着会话走）；只收起平移模式，避免抓手模式跨会话误操作。
@@ -166,6 +182,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     setState(() {
       _openIds.remove(device.id);
       _controllers.remove(device.id);
+      _suspended.remove(device.id);
       _pageZooms.remove(device.id)?.dispose();
       _viewKeys.remove(device.id);
       // 右窗格会话被关：清空显式指定，由 fallback 顶上来继续分屏
@@ -233,15 +250,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (rightId == null || id == rightId) return; // 已在右窗格
       // 右窗格改显示 id；若 id 是左窗格当前页，左窗格改显示原右侧
       final newLeft = (id == leftId) ? rightId : leftId;
+      _wake(id);
       setState(() => _splitRightId = id);
       if (newLeft != null && newLeft != leftId) {
         final session = sessionOf(_viewKeys[newLeft]);
         if (session != null && session.panMode.value) {
           session.setPanMode(false);
         }
+        _wake(newLeft);
         await store.select(newLeft);
-      }
-    } else {
+      }    } else {
       if (id == leftId) return; // 已在左窗格
       // 左窗格改显示 id；若 id 是右窗格当前页，右窗格改显示原左侧
       final newRight = (id == rightId) ? leftId : rightId;
@@ -249,8 +267,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (session != null && session.panMode.value) {
         session.setPanMode(false);
       }
+      _wake(id);
       await store.select(id);
       if (!mounted) return;
+      if (newRight != null) _wake(newRight);
       setState(() => _splitRightId = newRight);
     }
   }
@@ -293,6 +313,54 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final store = context.read<DeviceStore>();
     final id = store.currentId;
     if (id != null) _recreateSession(id);
+  }
+
+  // ---------- 内存哨兵：挂起 / 唤醒 / 回收 ----------
+
+  /// 哨兵回收入口：可见中的会话直接重建（页面重载几秒），后台会话
+  /// 挂起（销毁 WebView 回收 WebContent 高水位，页签保留）。
+  void _reclaimSession(String id, {required bool isCurrent}) {
+    if (!_openIds.contains(id)) return;
+    if (isCurrent) {
+      _recreateSession(id);
+      return;
+    }
+    // 分屏右窗格正显示的会话对用户可见，挂起会白屏，按可见处理跳过。
+    if (_splitOn && _splitRightId == id) return;
+    _suspendSession(id);
+  }
+
+  /// 挂起：销毁会话的 WebView 回收内存，页签保留，点回来自动重建。
+  void _suspendSession(String id) {
+    if (!_openIds.contains(id) || _suspended.contains(id)) return;
+    setState(() {
+      _suspended.add(id);
+      _controllers.remove(id);
+      _viewKeys.remove(id);
+    });
+  }
+
+  /// 唤醒挂起的会话：BrowserView 随构建重新创建，回到刚加载的状态。
+  void _wake(String id) {
+    if (!_suspended.contains(id)) return;
+    setState(() {
+      _suspended.remove(id);
+      _viewKeys[id] = GlobalKey();
+      _pageZooms.putIfAbsent(id, () => ValueNotifier(1.0));
+    });
+  }
+
+  void _notifyReclaim(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
   }
 
   SystemUiOverlayStyle _systemOverlayStyle(Brightness brightness) {
@@ -653,6 +721,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Widget _buildBrowser(DeviceStore store, String id) {
+    // 已被内存哨兵挂起：不挂 WebView（高水位已回收），点页签唤醒。
+    if (_suspended.contains(id)) {
+      return const SizedBox.shrink();
+    }
     RemoteDevice? device;
     for (final d in store.devices) {
       if (d.id == id) device = d;
@@ -664,6 +736,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           setState(() {
             _openIds.remove(id);
             _controllers.remove(id);
+            _suspended.remove(id);
             _pageZooms.remove(id)?.dispose();
             _viewKeys.remove(id);
             if (_splitRightId == id) _splitRightId = null;
