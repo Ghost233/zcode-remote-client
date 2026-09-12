@@ -68,8 +68,4 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
-    // WebViewCompat.setRendererPriorityPolicy：后台保活的另一半——
-    // 前台服务保主进程与网络，这里保 WebView 渲染进程（WebSocket 的
-    // 实际宿主进程）退后台不被降级/冻结/回收。见 MainActivity。
-    implementation("androidx.webkit:webkit:1.14.0")
 }

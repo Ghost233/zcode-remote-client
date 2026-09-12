@@ -8,8 +8,6 @@ import android.os.Process
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -131,12 +129,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun sweepAndPinRenderers() {
-        if (!WebViewFeature.isFeatureSupported(
-                WebViewFeature.SET_RENDERER_PRIORITY_POLICY,
-            )
-        ) {
-            return
-        }
+        // setRendererPriorityPolicy 是 API 26 加入的框架接口，更低版本
+        // 系统整体哑火；不用 androidx 包装（WebViewCompat 对应 API 要
+        // webkit 1.15+ 才有，依赖抬级不划算，框架直连已足够）。
+        if (Build.VERSION.SDK_INT < 26) return
         val root = window.decorView.rootView ?: return
         val queue = ArrayDeque<View>()
         queue.add(root)
@@ -144,14 +140,14 @@ class MainActivity : FlutterActivity() {
             val v = queue.removeFirst()
             if (v is WebView) {
                 try {
-                    WebViewCompat.setRendererPriorityPolicy(
-                        v,
-                        WebViewCompat.RENDERER_PRIORITY_IMPORTANT,
+                    v.setRendererPriorityPolicy(
+                        WebView.RENDERER_PRIORITY_IMPORTANT,
                         // 后台不豁免：退后台渲染进程不降级。
                         false,
                     )
                 } catch (_: Exception) {
-                    // 个别实例失败不影响其余（如渲染器尚未启动）。
+                    // 个别实例失败不影响其余（如古老内核不支持、渲染器
+                    // 尚未启动）。
                 }
             }
             if (v is ViewGroup) {
