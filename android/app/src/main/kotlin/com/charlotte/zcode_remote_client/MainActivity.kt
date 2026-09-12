@@ -5,6 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Process
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.WebView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -41,6 +46,12 @@ class MainActivity : FlutterActivity() {
                                 call.argument<Boolean>("enabled") ?: true,
                             )
                             .apply()
+                        result.success(true)
+                    }
+                    "pinRenderers" -> {
+                        // 把全部 WebView 的渲染进程钉成高优先级
+                        // （lib/services/keep_alive.dart 调用）。
+                        pinWebViewRenderers()
                         result.success(true)
                     }
                     else -> result.notImplemented()
@@ -84,6 +95,71 @@ class MainActivity : FlutterActivity() {
             }
         }
         super.onPause()
+    }
+
+    /**
+     * 回前台补钉一次渲染进程优先级：Dart 在 onWebViewCreated 就调过来
+     * 时 PlatformView 可能还没挂到视图树，那次扫描会漏钉，这里兜底。
+     * 对已钉实例重复设置无副作用。
+     */
+    override fun onResume() {
+        super.onResume()
+        pinWebViewRenderers()
+    }
+
+    /**
+     * 把视图树里全部 WebView 的渲染进程优先级钉为「与应用同级、后台
+     * 不豁免」。
+     *
+     * 前台服务只保住了主进程与网络；WebSocket 实际活在 WebView 独立
+     * 的渲染进程里——应用退后台后它会被系统降级，Android 11+ 的缓存
+     * 进程冻结器会整个冻住它（定时器与套接字 I/O 全停），内存紧张时
+     * 还会被单独回收。结果都是回前台时页面断连重连、整屏刷新。钉住
+     * 后渲染进程与主进程同优先级、同生共死，配合前台服务才算把保活
+     * 做完整。
+     *
+     * 视图树随会话增删变化，每次全树扫一遍；系统 WebView 不支持该
+     * 特性（老旧设备）时整体哑火。
+     */
+    private fun pinWebViewRenderers() {
+        sweepAndPinRenderers()
+        // PlatformView 挂树可能晚于 Dart 侧的调用时点：补两次延迟
+        // 扫描，覆盖创建时序竞态。
+        val root = window.decorView.rootView
+        root.postDelayed({ sweepAndPinRenderers() }, 500)
+        root.postDelayed({ sweepAndPinRenderers() }, 3000)
+    }
+
+    private fun sweepAndPinRenderers() {
+        if (!WebViewFeature.isFeatureSupported(
+                WebViewFeature.SET_RENDERER_PRIORITY_POLICY,
+            )
+        ) {
+            return
+        }
+        val root = window.decorView.rootView ?: return
+        val queue = ArrayDeque<View>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val v = queue.removeFirst()
+            if (v is WebView) {
+                try {
+                    WebViewCompat.setRendererPriorityPolicy(
+                        v,
+                        WebViewCompat.RENDERER_PRIORITY_IMPORTANT,
+                        // 后台不豁免：退后台渲染进程不降级。
+                        false,
+                    )
+                } catch (_: Exception) {
+                    // 个别实例失败不影响其余（如渲染器尚未启动）。
+                }
+            }
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) {
+                    queue.add(v.getChildAt(i))
+                }
+            }
+        }
     }
 
     private val keepAlivePrefs

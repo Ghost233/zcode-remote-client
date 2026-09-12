@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/remote_device.dart';
 import '../services/device_store.dart';
+import '../services/keep_alive.dart';
 import 'browser_session.dart';
 import 'glass.dart';
 import 'web_scripts.dart';
@@ -218,6 +219,74 @@ const String kEnterRemapScript = '''
 })();
 ''';
 
+/// 页面可见性钉死「前台」（v1.6.9，仅移动端注入）。
+///
+/// 后台保活的最后一环。前台服务保主进程与网络、渲染进程优先级钉扎
+/// 保 WebSocket 的执行环境，本脚本保证页面不知道自己进过后台：
+/// zcode 页面（和多数长连接页面一样）监听 visibilitychange，回到
+/// visible 时做唤醒探测——ping 几秒没回应就判定僵尸连接，清空已渲染
+/// 内容重连重放，用户看到的就是「切回前台明显刷新一遍」。把
+/// hidden/visibilityState 钉成 false/visible、拦掉 visibilitychange
+/// 监听后，页面始终认为自己在前台：退后台不主动断连，回前台也不走
+/// 探测重连；连接还活着时整个往返完全无感，连接真死了页面的常规
+/// 断线重连（由 socket close 触发，与可见性无关）也在后台静默完成。
+///
+/// 只拦可见性一族事件与 document 上的 freeze/resume（Chromium 页面
+/// 生命周期事件）；不碰 window 的 focus/blur（编辑器焦点语义敏感），
+/// hasFocus 恒 true 与钉死的状态自洽。系统层的定时器节流与 rAF 暂停
+/// 由 Chromium 按真实可见性决定，脚本改不了，也不影响本方案成立：
+/// 页面的事件驱动主路径（WebSocket 消息）不受节流影响。
+const String kVisibilityGuardScript = '''
+(function() {
+  if (window.__zcodeVisGuard) return;
+  window.__zcodeVisGuard = true;
+  // 状态钉死：任何时刻查询都是「前台可见」。
+  try {
+    var d = Document.prototype;
+    Object.defineProperty(d, 'hidden', {
+      configurable: true,
+      get: function() { return false; }
+    });
+    Object.defineProperty(d, 'visibilityState', {
+      configurable: true,
+      get: function() { return 'visible'; }
+    });
+    d.hasFocus = function() { return true; };
+  } catch (e) {}
+  function shouldBlock(t, target) {
+    if (t === 'visibilitychange' || t === 'webkitvisibilitychange' ||
+        t === 'mozvisibilitychange' || t === 'msvisibilitychange') {
+      return true;
+    }
+    // freeze/resume 只在 document 上派发，限定目标避免误吞页面
+    // 自定义的同名事件。
+    if ((t === 'freeze' || t === 'resume') && target === document) {
+      return true;
+    }
+    return false;
+  }
+  // 可见性事件监听一律拦截：页面收不到 hidden/visible 切换。
+  var add = EventTarget.prototype.addEventListener;
+  var rem = EventTarget.prototype.removeEventListener;
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (shouldBlock(type, this)) return;
+    return add.call(this, type, listener, options);
+  };
+  EventTarget.prototype.removeEventListener = function(type, listener, options) {
+    if (shouldBlock(type, this)) return;
+    return rem.call(this, type, listener, options);
+  };
+  // document.onvisibilitychange 赋值通道也吞掉（绕过 addEventListener）。
+  try {
+    Object.defineProperty(Document.prototype, 'onvisibilitychange', {
+      configurable: true,
+      get: function() { return null; },
+      set: function() {}
+    });
+  } catch (e) {}
+})();
+''';
+
 /// 读取页面实际背景色（body 透明时沿第一个子元素向下找第一个不透明
 /// 背景的容器）。宿主用它把 Android SafeArea 露出的区域刷成与页面
 /// 同色，避免露出 Flutter 默认背景造成色带。
@@ -278,6 +347,7 @@ class BrowserView extends StatefulWidget {
     required this.onControllerReady,
     required this.onTitleChanged,
     required this.onReplaceAddress,
+    required this.onRenderProcessGone,
   });
 
   final RemoteDevice device;
@@ -294,6 +364,10 @@ class BrowserView extends StatefulWidget {
 
   /// 加载失败时用户点了"替换地址"。
   final VoidCallback onReplaceAddress;
+
+  /// 渲染进程死亡（崩溃/被系统回收）：WebView 已死不会自己复活，
+  /// 由宿主重建会话（换 GlobalKey 强制 WebView 重新创建）。
+  final VoidCallback onRenderProcessGone;
 
   @override
   State<BrowserView> createState() => BrowserViewState();
@@ -760,6 +834,13 @@ class BrowserViewState extends State<BrowserView>
                 source: kDesktopViewportScript,
                 injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
               ),
+            // 移动端可见性钉死前台：页面退后台不断连、回前台不走
+            // 「探测→重连→整屏重建」（完整机制见脚本顶部注释）。
+            if (Platform.isAndroid || Platform.isIOS)
+              UserScript(
+                source: kVisibilityGuardScript,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+              ),
           ]),
           pullToRefreshController: _pullToRefresh,
           contextMenu: ContextMenu(
@@ -786,6 +867,9 @@ class BrowserViewState extends State<BrowserView>
             // 插件默认开双指缩放，开关默认关：创建时按开关状态显式应用。
             if (Platform.isAndroid) {
               _applyPinchSettings(controller, pinchZoom.value);
+              // 钉渲染进程优先级：退后台不被降级/冻结/回收（WebSocket
+              // 存活的执行环境）。方法内部自带平台与特性门控。
+              BackgroundKeepAlive.pinWebViewRenderers();
             }
           },
           onLoadStart: (controller, url) {
@@ -804,6 +888,12 @@ class BrowserViewState extends State<BrowserView>
             // AT_DOCUMENT_START 已装上，这里只防注入时序异常。
             await controller.evaluateJavascript(source: kImeEnterGuardScript);
             await controller.evaluateJavascript(source: kEnterRemapScript);
+            // 可见性守卫同样兜底重注（幂等，仅移动端）。
+            if (Platform.isAndroid || Platform.isIOS) {
+              await controller.evaluateJavascript(
+                source: kVisibilityGuardScript,
+              );
+            }
             // 读取页面实际背景色：宿主用它把 Android SafeArea 露出的
             // 区域刷成与页面同色。SPA 可能稍后才挂内容，延迟再取一次。
             _readPageBackground(controller);
@@ -820,6 +910,12 @@ class BrowserViewState extends State<BrowserView>
             if (request.isForMainFrame ?? false) {
               setState(() => _mainFrameError = error);
             }
+          },
+          onRenderProcessGone: (controller, detail) {
+            // 渲染进程被杀（内存极端紧张时钉优先级也保不住）：WebView
+            // 已死不会自己复活，插件只通知不处理——交宿主重建会话，
+            // 别留一块死白屏。
+            widget.onRenderProcessGone();
           },
           onTitleChanged: (controller, title) {
             if (title != null) widget.onTitleChanged(title);

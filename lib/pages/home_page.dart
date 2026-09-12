@@ -125,6 +125,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       case AppLifecycleState.resumed:
         BackgroundKeepAlive.stop();
+        // 渲染进程优先级补钉：覆盖创建时序竞态（onWebViewCreated 时
+        // PlatformView 可能还没挂树，那次扫描会漏）。重复钉无副作用。
+        BackgroundKeepAlive.pinWebViewRenderers();
       case AppLifecycleState.detached:
         break;
     }
@@ -762,6 +765,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       onTitleChanged: (title) =>
           context.read<DeviceStore>().maybeFillRemarkFromTitle(id, title),
       onReplaceAddress: () => DeviceEditSheet.show(context, editing: device),
+      onRenderProcessGone: () {
+        // 渲染进程被系统回收：重建会话让 WebView 复活（页面重载一次），
+        // 比留一块死白屏强。优先级钉扎生效后这应当是极罕见的兜底。
+        _recreateSession(id);
+        _notifyReclaim('网页渲染进程被系统回收，已自动重新加载');
+      },
     );
   }
 

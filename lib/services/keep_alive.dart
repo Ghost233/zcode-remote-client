@@ -48,4 +48,19 @@ class BackgroundKeepAlive {
       await _channel.invokeMethod<void>('setEnabled', {'enabled': enabled});
     } catch (_) {}
   }
+
+  /// 把全部 WebView 的渲染进程优先级钉为「与应用同级、后台不豁免」。
+  ///
+  /// 前台服务只保住主进程与网络；WebSocket 实际活在 WebView 独立的
+  /// 渲染进程里——应用退后台后它被系统降级，Android 11+ 的缓存进程
+  /// 冻结器会整个冻住它（定时器与套接字 I/O 全停），内存紧张时还会
+  /// 被单独回收，回前台页面就断连重连、整屏刷新。钉住后渲染进程随
+  /// 主进程同生共死。对 WebView 实例持久生效，重复调用无副作用；
+  /// 原生侧自带特性门控（老旧系统 WebView 不支持时静默跳过）。
+  static Future<void> pinWebViewRenderers() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('pinRenderers');
+    } catch (_) {}
+  }
 }
