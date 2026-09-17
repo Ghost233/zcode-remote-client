@@ -366,7 +366,8 @@ class BrowserView extends StatefulWidget {
   final VoidCallback onReplaceAddress;
 
   /// 渲染进程死亡（崩溃/被系统回收）：WebView 已死不会自己复活，
-  /// 由宿主重建会话（换 GlobalKey 强制 WebView 重新创建）。
+  /// 由宿主决定立即重建会话（前台可见）还是挂起页签（后台，回前台
+  /// 或点击页签时再重建），见 home_page 的 _onRendererProcessGone。
   final VoidCallback onRenderProcessGone;
 
   @override

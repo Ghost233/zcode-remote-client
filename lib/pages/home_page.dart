@@ -65,6 +65,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// 左侧窗格宽度占比（拖动分隔条更新），默认对半。
   double _splitFraction = 0.5;
 
+  /// 各会话最近一次渲染进程死亡时间：冷却窗口内重复死亡说明内存持续
+  /// 紧张，只挂起不再重建（防「杀-建-杀」重建风暴，见
+  /// [_onRendererProcessGone]）。
+  final Map<String, DateTime> _rendererDiedAt = {};
+
+  /// 渲染进程死亡后允许立即重建的冷却窗口。
+  static const Duration _rendererRebuildCooldown = Duration(seconds: 60);
+
   @override
   void initState() {
     super.initState();
@@ -82,6 +90,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     guard.onReclaim = _reclaimSession;
     guard.onNotify = _notifyReclaim;
     guard.start();
+    // 系统内存吃紧（Android onTrimMemory 转发）：主动挂起不可见会话，
+    // 抢在系统把整个进程组连根杀之前自己优雅回收（v1.7.0 修后台闪退）。
+    BackgroundKeepAlive.setOnTrimMemory(_onSystemTrimMemory);
   }
 
   void _onDownloadStatusChanged() {
@@ -128,6 +139,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         // 渲染进程优先级补钉：覆盖创建时序竞态（onWebViewCreated 时
         // PlatformView 可能还没挂树，那次扫描会漏）。重复钉无副作用。
         BackgroundKeepAlive.pinWebViewRenderers();
+        // 后台被挂起的**可见**会话（渲染进程被系统回收 / trim 回收）
+        // 回前台自动唤醒；其余挂起会话点页签再唤醒，避免回前台瞬间
+        // 重建全部 WebView 再撞一次内存墙。
+        final store = context.read<DeviceStore>();
+        for (final id in [store.currentId, if (_splitOn) _splitRightId]) {
+          if (id != null && _suspended.contains(id)) _wake(id);
+        }
       case AppLifecycleState.detached:
         break;
     }
@@ -144,6 +162,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     MemoryGuard.instance.stop();
+    BackgroundKeepAlive.setOnTrimMemory(null);
     DownloadManager.instance.status.removeListener(_onDownloadStatusChanged);
     WidgetsBinding.instance.removeObserver(this);
     for (final z in _pageZooms.values) {
@@ -186,6 +205,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _openIds.remove(device.id);
       _controllers.remove(device.id);
       _suspended.remove(device.id);
+      _rendererDiedAt.remove(device.id);
       _pageZooms.remove(device.id)?.dispose();
       _viewKeys.remove(device.id);
       // 右窗格会话被关：清空显式指定，由 fallback 顶上来继续分屏
@@ -740,6 +760,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             _openIds.remove(id);
             _controllers.remove(id);
             _suspended.remove(id);
+            _rendererDiedAt.remove(id);
             _pageZooms.remove(id)?.dispose();
             _viewKeys.remove(id);
             if (_splitRightId == id) _splitRightId = null;
@@ -765,13 +786,54 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       onTitleChanged: (title) =>
           context.read<DeviceStore>().maybeFillRemarkFromTitle(id, title),
       onReplaceAddress: () => DeviceEditSheet.show(context, editing: device),
-      onRenderProcessGone: () {
-        // 渲染进程被系统回收：重建会话让 WebView 复活（页面重载一次），
-        // 比留一块死白屏强。优先级钉扎生效后这应当是极罕见的兜底。
-        _recreateSession(id);
-        _notifyReclaim('网页渲染进程被系统回收，已自动重新加载');
-      },
+      onRenderProcessGone: () => _onRendererProcessGone(id),
     );
+  }
+
+  /// 渲染进程被杀（系统内存回收 / 渲染器自身崩溃）时的处理：
+  ///
+  /// - **前台可见会话**：立即重建（换 GlobalKey 重载页面，用户几乎
+  ///   无感）；但冷却窗口（60 秒）内同会话再次死亡说明内存持续紧张，
+  ///   只挂起不再重建——否则「杀-建-杀」循环只会加速系统把整个应用
+  ///   连根杀。
+  /// - **后台/不可见会话**：只挂起（销毁 WebView，页签保留），后台
+  ///   重建大概率立刻再被杀、白白吃内存。回前台时当前（及分屏右）
+  ///   会话由 resumed 回调自动唤醒，其余点页签恢复。
+  void _onRendererProcessGone(String id) {
+    if (!_openIds.contains(id) || _suspended.contains(id)) return;
+    final now = DateTime.now();
+    final last = _rendererDiedAt[id];
+    _rendererDiedAt[id] = now;
+    final store = context.read<DeviceStore>();
+    final visible = store.currentId == id || (_splitOn && _splitRightId == id);
+    final state = WidgetsBinding.instance.lifecycleState;
+    final inForeground =
+        state != AppLifecycleState.paused && state != AppLifecycleState.hidden;
+    final cooled = last == null ||
+        now.difference(last) > _rendererRebuildCooldown;
+    if (visible && inForeground && cooled) {
+      _recreateSession(id);
+      _notifyReclaim('网页渲染进程被系统回收，已自动重新加载');
+      return;
+    }
+    _suspendSession(id);
+    if (visible && inForeground) {
+      _notifyReclaim('网页渲染进程反复被系统回收，会话已挂起（点击页签恢复）');
+    }
+  }
+
+  /// 系统内存吃紧（Android onTrimMemory 转发）：主动挂起不可见会话，
+  /// 把「系统被迫把整个进程组连根杀」变成「自己优雅回收」。当前会话
+  /// 与分屏右窗格可见会话不动；挂起的会话页签保留，点回来自动重建。
+  void _onSystemTrimMemory(int level) {
+    if (!mounted) return;
+    final store = context.read<DeviceStore>();
+    final current = store.currentId;
+    for (final id in List.of(_openIds)) {
+      if (id == current) continue;
+      if (_splitOn && _splitRightId == id) continue;
+      _suspendSession(id);
+    }
   }
 
   /// 页签标题：备注优先，没有备注用 URL 主机名兜底（URL 含凭证，

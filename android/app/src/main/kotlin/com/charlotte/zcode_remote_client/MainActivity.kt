@@ -1,6 +1,7 @@
 package com.charlotte.zcode_remote_client
 
 import android.app.ActivityManager
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -14,11 +15,16 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
+    // 后台保活通道：双向使用——Dart 调 start/stop/setEnabled/pinRenderers，
+    // 原生把 onTrimMemory 内存压力事件回调给 Dart（见 onTrimMemory）。
+    private var keepAliveChannel: MethodChannel? = null
+
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
         // 后台保活服务的启停通道（lib/services/keep_alive.dart 调用）。
-        MethodChannel(engine.dartExecutor.binaryMessenger, "app/keep_alive")
-            .setMethodCallHandler { call, result ->
+        keepAliveChannel =
+            MethodChannel(engine.dartExecutor.binaryMessenger, "app/keep_alive")
+        keepAliveChannel?.setMethodCallHandler { call, result ->
                 when (call.method) {
                     "start" -> {
                         val intent = Intent(this, KeepAliveService::class.java)
@@ -106,15 +112,49 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * 把视图树里全部 WebView 的渲染进程优先级钉为「与应用同级、后台
-     * 不豁免」。
+     * 系统内存吃紧（onTrimMemory）：转发给 Dart 主动挂起后台会话。
+     *
+     * v1.7.0 修复后台闪退的一环：与其等系统内存耗尽把整个进程组（主
+     * 进程 + 全部渲染进程）连根杀，不如在系统报 RUNNING_LOW/CRITICAL
+     * 或后台回收级别的第一时间，让 Dart 把不可见会话的 WebView 主动
+     * 销毁（页签保留），把内存还回去。UI_HIDDEN（20）只是退后台的
+     * 常规通知、不代表内存压力，排除。
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val pressing = level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW &&
+            level != ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
+        if (!pressing) return
+        keepAliveChannel?.invokeMethod(
+            "onTrimMemory", level,
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {}
+                override fun error(
+                    errorCode: String,
+                    errorMessage: String?,
+                    errorDetails: Any?,
+                ) {}
+                override fun notImplemented() {}
+            },
+        )
+    }
+
+    /**
+     * 把视图树里全部 WebView 的渲染进程优先级钉为 NORMAL 且后台不豁免。
      *
      * 前台服务只保住了主进程与网络；WebSocket 实际活在 WebView 独立
-     * 的渲染进程里——应用退后台后它会被系统降级，Android 11+ 的缓存
-     * 进程冻结器会整个冻住它（定时器与套接字 I/O 全停），内存紧张时
-     * 还会被单独回收。结果都是回前台时页面断连重连、整屏刷新。钉住
-     * 后渲染进程与主进程同优先级、同生共死，配合前台服务才算把保活
-     * 做完整。
+     * 的渲染进程里。默认策略下应用退后台渲染进程会被降到 WAIVED
+     * （等于 cached），Android 11+ 的冻结器整个冻住它（定时器与套接
+     * 字 I/O 全停），回前台就断连刷新——这是钉扎要解决的部分：NORMAL
+     * 保持在冻结线之上（非 cached 不冻结），后台连接存活。
+     *
+     * 为什么不是 v1.6.9 的 IMPORTANT：IMPORTANT 把渲染进程钉成「前台
+     * 级不可杀」，且比挂了前台服务的主进程还难杀；多会话下系统内存
+     * 紧张时 LMK 杀不动这块几百兆，最终只能把整个应用进程组连根杀
+     * （用户看到的就是后台闪退）。NORMAL 让系统在极端压力下可以
+     * 「只回收单个渲染进程」软着陆——应用存活，渲染进程死亡由 Dart
+     * 侧挂起会话、回前台再重建（见 home_page 的 onRenderProcessGone
+     * 处理），比整 app 陪葬好得多。
      *
      * 视图树随会话增删变化，每次全树扫一遍；系统 WebView 不支持该
      * 特性（老旧设备）时整体哑火。
@@ -141,8 +181,11 @@ class MainActivity : FlutterActivity() {
             if (v is WebView) {
                 try {
                     v.setRendererPriorityPolicy(
-                        WebView.RENDERER_PRIORITY_IMPORTANT,
-                        // 后台不豁免：退后台渲染进程不降级。
+                        // BOUND = 中等优先级（IMPORTANT=0 / BOUND=1 /
+                        // WAIVED=2 三档）：钉在冻结线之上、低于前台级。
+                        WebView.RENDERER_PRIORITY_BOUND,
+                        // 后台不豁免：退后台渲染进程不降到 WAIVED、
+                        // 不进冻结区，但保留 LMK 单独回收它的可能。
                         false,
                     )
                 } catch (_: Exception) {
