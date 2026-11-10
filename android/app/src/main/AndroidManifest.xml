@@ -8,9 +8,11 @@
     <!-- 后台保活前台服务（退后台挂常驻通知，保持 ZCode 会话连接） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- 用户自填的远程地址可能使用局域网 HTTP，正式包也需允许。 -->
     <application
         android:label="ZCode远程客户端"
         android:name="${applicationName}"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
         <activity
